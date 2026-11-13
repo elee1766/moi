@@ -7,7 +7,13 @@ const originalConfig = config.getAppConfig()
 const configSpy = spyOn(config, 'getAppConfig')
 const detect = spyOn(executable, 'detectInstalledHarnesses')
 const spawn = spyOn(Bun, 'spawn')
-const installed = { 'claude-code': false, codex: false, openclaw: false, hermes: false }
+const installed = {
+  'claude-code': false,
+  codex: false,
+  openclaw: false,
+  hermes: false,
+  towa: false
+}
 
 afterAll(() => {
   configSpy.mockRestore()

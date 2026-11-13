@@ -94,10 +94,36 @@ export type AcpModelInfo = {
 export type AcpModelState = {
   availableModels?: AcpModelInfo[]
   currentModelId?: string
+  // Id of the `model`-category session config option the state came from.
+  // Set means the agent switches models with `session/set_config_option`;
+  // unset means the pre-1.0 `session/set_model`.
+  configId?: string
 }
 
 // `NewSessionResponse` plus the dropped `models` field.
 export type AcpNewSessionResult = NewSessionResponse & { models?: AcpModelState | null }
+
+// The model state of a `session/new` or `session/load` result. The current
+// spec carries it as a `model`-category select config option, which wins;
+// the pre-1.0 `models` field is the fallback.
+export function acpModelState(
+  result: Pick<AcpNewSessionResult, 'configOptions' | 'models'> | null | undefined
+): AcpModelState | undefined {
+  const option = result?.configOptions?.find(o => o.category === 'model' && o.type === 'select')
+  if (option && option.type === 'select') {
+    const flat = option.options.flatMap(entry => ('group' in entry ? entry.options : [entry]))
+    return {
+      configId: option.id,
+      currentModelId: option.currentValue,
+      availableModels: flat.map(o => ({
+        modelId: o.value,
+        name: o.name,
+        ...(o.description ? { description: o.description } : {})
+      }))
+    }
+  }
+  return result?.models ?? undefined
+}
 
 // ---------------------------------------------------------------------------
 // helpers

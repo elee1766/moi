@@ -4,7 +4,8 @@ export const HARNESS_ORDER = [
   'claude-code',
   'codex',
   'openclaw',
-  'hermes'
+  'hermes',
+  'towa'
 ] as const satisfies readonly HarnessType[]
 
 export function orderHarnesses(harnesses: Iterable<HarnessType>): HarnessType[] {

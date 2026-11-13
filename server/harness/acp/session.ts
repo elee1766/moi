@@ -43,6 +43,7 @@ import {
   type AcpModelState,
   type AcpNewSessionResult,
   type AcpPromptBlock,
+  acpModelState,
   type ContentChunk,
   type PromptResponse,
   type SessionUpdate,
@@ -120,6 +121,9 @@ type SessionRecord = {
   // no-op there.
   toolCallSeq: Map<string, number>
   model?: string
+  // Config option id for model switches (`session/set_config_option`). Unset
+  // falls back to the pre-1.0 `session/set_model`.
+  modelConfigId?: string
   queue: QueuedSend[]
   unsubscribe?: () => void
 }
@@ -376,6 +380,7 @@ function createRecord(input: {
   client: AcpClient
   config: AcpProviderConfig
   model?: string
+  modelConfigId?: string
 }): SessionRecord {
   const rec: SessionRecord = {
     workspaceId: input.workspaceId,
@@ -392,6 +397,7 @@ function createRecord(input: {
     openToolCalls: new Set(),
     toolCallSeq: new Map(),
     model: input.model,
+    modelConfigId: input.modelConfigId,
     queue: []
   }
   rec.unsubscribe = input.client.onNotification((method, params) =>
@@ -426,11 +432,17 @@ async function resumeSession(
   // so flag the record as replaying to suppress previews and title events.
   rec.replaying = true
   try {
-    await client.rpc('session/load', {
+    const loaded = await client.rpc<AcpNewSessionResult | null>('session/load', {
       sessionId: input.sessionId,
       cwd: input.workspacePath,
       mcpServers: []
     })
+    const state = acpModelState(loaded)
+    if (state?.configId) rec.modelConfigId = state.configId
+    if (state?.currentModelId) {
+      rec.model = state.currentModelId
+      rec.acc.setModel(state.currentModelId)
+    }
   } catch (err) {
     // The record is already registered, and a live record makes every later
     // send skip `session/load` and prompt a session this process never
@@ -603,9 +615,10 @@ export async function sendAcpMessage(
       })
       // A real session start carries the same model state the picker would
       // otherwise open a throwaway session for — keep the cache current.
-      cacheAcpModelState(input.workspacePath, created.models, fingerprint)
+      const modelState = acpModelState(created)
+      cacheAcpModelState(input.workspacePath, modelState, fingerprint)
       const realId = created.sessionId
-      const model = input.model ?? created.models?.currentModelId
+      const model = input.model ?? modelState?.currentModelId
       if (realId !== input.sessionId) {
         aliases.set(recKey(input.workspaceId, input.sessionId), realId)
         await renameSessionReferences(
@@ -621,7 +634,8 @@ export async function sendAcpMessage(
         sessionId: realId,
         client,
         config,
-        model
+        model,
+        modelConfigId: modelState?.configId
       })
       await applyNoPromptMode(client, config, realId)
       if (input.model) await setSessionModel(config, rec, client, input.model)
@@ -694,7 +708,15 @@ async function setSessionModel(
   modelId: string
 ): Promise<void> {
   try {
-    await client.rpc('session/set_model', { sessionId: rec.sessionId, modelId })
+    if (rec.modelConfigId) {
+      await client.rpc('session/set_config_option', {
+        sessionId: rec.sessionId,
+        configId: rec.modelConfigId,
+        value: modelId
+      })
+    } else {
+      await client.rpc('session/set_model', { sessionId: rec.sessionId, modelId })
+    }
     rec.model = modelId
     rec.acc.setModel(modelId)
   } catch (err) {

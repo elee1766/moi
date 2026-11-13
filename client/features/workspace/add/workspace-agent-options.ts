@@ -5,13 +5,16 @@ import { HARNESS_ORDER } from '@/lib/harness-types'
 
 type WorkspaceAgentConfig = {
   importOnly: boolean
+  // Shown only once installed, never as an install suggestion.
+  hiddenWhenMissing?: boolean
 }
 
 const workspaceAgents: Record<HarnessType, WorkspaceAgentConfig> = {
   'claude-code': { importOnly: false },
   codex: { importOnly: false },
   openclaw: { importOnly: true },
-  hermes: { importOnly: true }
+  hermes: { importOnly: true },
+  towa: { importOnly: false, hiddenWhenMissing: true }
 }
 
 export type { HarnessOption as WorkspaceAgentOption } from '@/client/features/harness/harness-selector'
@@ -27,7 +30,9 @@ export function getWorkspaceAgentOptions(
     return availability.status !== 'unavailable' || availability.code !== 'not-installed'
   }
   return HARNESS_ORDER.filter(
-    harness => installed(harness) || !workspaceAgents[harness].importOnly
+    harness =>
+      installed(harness) ||
+      !(workspaceAgents[harness].importOnly || workspaceAgents[harness].hiddenWhenMissing)
   ).map(harness => {
     const config = workspaceAgents[harness]
     const instruction = HARNESS_INSTRUCTIONS[harness]

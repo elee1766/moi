@@ -46,14 +46,17 @@ describe('PATH harness executables', () => {
       'claude-code': false,
       codex: false,
       openclaw: false,
-      hermes: false
+      hermes: false,
+      towa: false
     })
-    for (const command of ['claude', 'codex', 'openclaw', 'hermes']) await addExecutable(command)
+    for (const command of ['claude', 'codex', 'openclaw', 'hermes', 'towa'])
+      await addExecutable(command)
     expect(await detectInstalledHarnesses(tempDir)).toEqual({
       'claude-code': true,
       codex: true,
       openclaw: true,
-      hermes: true
+      hermes: true,
+      towa: true
     })
     await rm(join(tempDir, 'codex'))
     expect((await detectInstalledHarnesses(tempDir)).codex).toBe(false)

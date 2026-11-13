@@ -379,6 +379,54 @@ describe('ACP model state', () => {
     ])
     expect(calls[3].params).toEqual({ sessionId: agent.sessionId, modelId: 'model-b' })
   })
+
+  test('switches with session/set_config_option when models arrive as a config option', async () => {
+    const agent = await mockAgent({
+      newSessions: [
+        {
+          configOptions: [
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              type: 'select',
+              currentValue: 'model-a',
+              options: [
+                { value: 'model-a', name: 'Model A' },
+                { value: 'model-b', name: 'Model B' }
+              ]
+            }
+          ]
+        }
+      ]
+    })
+    const send = (content: string, model?: string) =>
+      sendAcpMessage(agent.config, {
+        ...agent.ctx,
+        sessionId: agent.sessionId,
+        isNew: content === 'first',
+        content,
+        ...(model ? { model } : {})
+      })
+
+    await send('first')
+    await send('second', 'model-b')
+
+    expect(await catalog(agent)).toEqual(['model-a', 'model-b'])
+    const calls = await agent.calls()
+    expect(calls.map(c => c.method)).toEqual([
+      'initialize',
+      'session/new',
+      'session/prompt',
+      'session/set_config_option',
+      'session/prompt'
+    ])
+    expect(calls[3].params).toEqual({
+      sessionId: agent.sessionId,
+      configId: 'model',
+      value: 'model-b'
+    })
+  })
 })
 
 test('text-attachment-only sends reach the ACP prompt and retain display parts', async () => {

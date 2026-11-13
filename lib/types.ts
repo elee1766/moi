@@ -457,7 +457,7 @@ export type WorkspaceOpenRequestMessage = {
   workspaceId: string
 }
 
-export type HarnessType = 'claude-code' | 'openclaw' | 'codex' | 'hermes'
+export type HarnessType = 'claude-code' | 'openclaw' | 'codex' | 'hermes' | 'towa'
 
 export type WorkspaceSkillStatus = {
   name: string

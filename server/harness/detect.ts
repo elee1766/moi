@@ -19,13 +19,20 @@ import { type OpenClawAgent, discoverOpenClawAgents } from './openclaw/discovery
 
 // Harness names accepted by `--harness`, in the order they are listed to the
 // user. Detection order is separate (see detectHarness).
-export const HARNESS_TYPES: readonly HarnessType[] = ['claude-code', 'codex', 'hermes', 'openclaw']
+export const HARNESS_TYPES: readonly HarnessType[] = [
+  'claude-code',
+  'codex',
+  'hermes',
+  'openclaw',
+  'towa'
+]
 
 export const harnessLabel: Record<HarnessType, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   hermes: 'Hermes',
-  openclaw: 'OpenClaw'
+  openclaw: 'OpenClaw',
+  towa: 'towa'
 }
 
 export function isHarnessName(value: string): value is HarnessType {

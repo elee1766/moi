@@ -4,12 +4,14 @@ export const harnessLabel: Record<HarnessType, string> = {
   'claude-code': 'Claude',
   openclaw: 'OpenClaw',
   codex: 'ChatGPT',
-  hermes: 'Hermes'
+  hermes: 'Hermes',
+  towa: 'towa'
 }
 
 export const harnessDescription: Record<HarnessType, string> = {
   'claude-code': 'Anthropic',
   codex: 'OpenAI',
   openclaw: 'Open-source',
-  hermes: 'Nous Research'
+  hermes: 'Nous Research',
+  towa: 'GFX Labs'
 }

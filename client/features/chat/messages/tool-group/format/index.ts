@@ -7,6 +7,7 @@ import { claudeFormatter } from './claude'
 import { codexFormatter } from './codex'
 import { hermesFormatter } from './hermes'
 import { openclawFormatter } from './openclaw'
+import { towaFormatter } from './towa'
 import { makeShortenPaths, type ToolFormatter } from './shared'
 
 export { formatDuration } from './shared'
@@ -16,7 +17,8 @@ const FORMATTERS: Record<NonNullable<ToolCall['provider']>, ToolFormatter> = {
   'claude-code': claudeFormatter,
   openclaw: openclawFormatter,
   codex: codexFormatter,
-  hermes: hermesFormatter
+  hermes: hermesFormatter,
+  towa: towaFormatter
 }
 
 // Calls persisted before the provider field existed carry none — they came

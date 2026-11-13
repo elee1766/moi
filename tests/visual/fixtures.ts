@@ -142,6 +142,9 @@ export const HARNESSES: HarnessStatuses = {
   },
   hermes: {
     availability: { status: 'unavailable', reason: 'Not installed', code: 'not-installed' }
+  },
+  towa: {
+    availability: { status: 'unavailable', reason: 'Not installed', code: 'not-installed' }
   }
 }
 

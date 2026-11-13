@@ -103,12 +103,16 @@ Current harnesses:
 | OpenClaw (gateway)      | `openclaw/session.ts`    | `openclaw/adapter.ts`    | shipped, experimental |
 | Codex (app-server)      | `codex/session.ts`       | `codex/adapter.ts`       | shipped, experimental |
 | Hermes (ACP)            | `acp/session.ts`         | `acp/adapter.ts`         | shipped, experimental |
+| towa (ACP)              | `acp/session.ts`         | `acp/adapter.ts`         | experimental          |
 
 `acp/` is the odd one out: it is **not** a harness, it is the shared
-implementation of the Agent Client Protocol (stdio JSON-RPC), and `hermes/`
-is the first provider built on it. Any other ACP-speaking agent (Gemini CLI,
-opencode, Zed's agents) should become another thin folder next to `hermes/`
-rather than a copy of the protocol. The split is:
+implementation of the Agent Client Protocol (stdio JSON-RPC). `hermes/` and
+`towa/` are providers built on it. Any other ACP-speaking agent (Gemini CLI,
+opencode, Zed's agents) should become another thin folder that calls
+`createAcpHarness` rather than a copy of the protocol. Models are read from a
+`model`-category session config option when the agent sends one (switched with
+`session/set_config_option`), and from the pre-1.0 `models` field otherwise
+(switched with `session/set_model`). The split is:
 
 ```
 acp/                  provider-agnostic protocol
@@ -117,10 +121,13 @@ acp/                  provider-agnostic protocol
   adapter.ts          session/update → Turn/ToolCall (+ chunk accumulation)
   session.ts          per-session state machine, driven by AcpProviderConfig
   discovery.ts        session/list, model catalog, home-card preview
+  harness.ts          createAcpHarness: the shared Harness object
 hermes/               provider specifics only
   discovery.ts        profile discovery (the importable "agents")
-  index.ts            the Harness object + AcpProviderConfig
+  index.ts            AcpProviderConfig + Harness overrides
   NOTES.md            protocol research + backend quirks
+towa/
+  index.ts            AcpProviderConfig (`towa serve`)
 ```
 
 A new ACP provider supplies an `AcpProviderConfig`: an id, the spawn spec

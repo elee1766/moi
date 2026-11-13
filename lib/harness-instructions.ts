@@ -21,6 +21,10 @@ export const HARNESS_INSTRUCTIONS: Record<HarnessType, HarnessInstruction> = {
   hermes: {
     reason: 'Run in terminal to connect Hermes:',
     command: 'moi hermes init'
+  },
+  towa: {
+    reason: 'Run in terminal to install towa:',
+    command: 'go install github.com/gfx-labs/towa/cmd/towa@latest'
   }
 }
 

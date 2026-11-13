@@ -5,6 +5,7 @@ import claudeIcon from '@/client/assets/claude.svg'
 import hermesIcon from '@/client/assets/hermes.png'
 import openaiIcon from '@/client/assets/openai.svg'
 import openclawIcon from '@/client/assets/openclaw.svg'
+import towaIcon from '@/client/assets/towa.svg'
 import { resolveIdentityIcon } from '@/client/lib/identity-icon-registry'
 import { cn } from '@/client/lib/cn'
 import { DEFAULT_PRIMARY_COLOR, deriveThemeColors, resolveThemeColorOverrides } from '@/lib/themes'
@@ -14,7 +15,8 @@ export const harnessIcon: Record<HarnessType, string> = {
   'claude-code': claudeIcon,
   openclaw: openclawIcon,
   codex: openaiIcon,
-  hermes: hermesIcon
+  hermes: hermesIcon,
+  towa: towaIcon
 }
 
 type WorkspaceIconProps = {

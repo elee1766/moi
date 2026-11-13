@@ -6,7 +6,12 @@ import { acpSessionToSessionInfo } from './adapter'
 import { archivedAcpSessions } from './archived'
 import { getAcpClient, peekAcpClient } from './client'
 import { clearAcpModelCache, peekAcpModelState, storeAcpModelState } from './model-state'
-import type { ListSessionsResponse, AcpModelState, AcpNewSessionResult } from './wire'
+import {
+  type ListSessionsResponse,
+  type AcpModelState,
+  type AcpNewSessionResult,
+  acpModelState
+} from './wire'
 import type { WorkspaceActivityPreview } from '../types'
 import { debug } from '../../debug'
 
@@ -92,7 +97,7 @@ async function discoverAcpModelState(
     cwd: ctx.workspacePath,
     mcpServers: []
   })
-  return created.models ?? undefined
+  return acpModelState(created)
 }
 
 export async function listAcpModels(

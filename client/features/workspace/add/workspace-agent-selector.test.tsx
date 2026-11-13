@@ -13,7 +13,8 @@ const missing: HarnessInstallations = {
   'claude-code': false,
   codex: false,
   openclaw: false,
-  hermes: false
+  hermes: false,
+  towa: false
 }
 
 function renderStep(installed?: HarnessInstallations, isChecking = false, errorMessage?: string) {

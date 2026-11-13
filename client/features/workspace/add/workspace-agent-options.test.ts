@@ -13,7 +13,8 @@ describe('create workspace agent options', () => {
       'claude-code': Boolean(mask & 1),
       codex: Boolean(mask & 2),
       openclaw: Boolean(mask & 4),
-      hermes: Boolean(mask & 8)
+      hermes: Boolean(mask & 8),
+      towa: false
     }
     test(`handles installation combination ${mask}`, () => {
       const options = getWorkspaceAgentOptions(installed)
@@ -45,7 +46,8 @@ describe('create workspace agent options', () => {
       'claude-code': false,
       codex: false,
       openclaw: false,
-      hermes: false
+      hermes: false,
+      towa: false
     })
     expect(options.map(option => option.disabledReason)).toEqual([
       'Run in terminal to install Claude:',
@@ -62,7 +64,8 @@ describe('create workspace agent options', () => {
       'claude-code': true,
       codex: true,
       openclaw: true,
-      hermes: true
+      hermes: true,
+      towa: false
     })
     expect(options.map(option => option.disabled)).toEqual([false, false, true, true])
   })
@@ -78,7 +81,8 @@ describe('import workspace agent options', () => {
       'claude-code': Boolean(mask & 1),
       codex: Boolean(mask & 2),
       openclaw: Boolean(mask & 4),
-      hermes: Boolean(mask & 8)
+      hermes: Boolean(mask & 8),
+      towa: false
     }
     test(`shares create visibility and installation rules for combination ${mask}`, () => {
       const createOptions = getWorkspaceAgentOptions(installed)
@@ -112,7 +116,8 @@ describe('import workspace agent options', () => {
       'claude-code': true,
       codex: true,
       openclaw: true,
-      hermes: true
+      hermes: true,
+      towa: false
     }
     expect(
       getWorkspaceAgentOptions(installed).find(option => option.harness === harness)
@@ -138,7 +143,8 @@ describe('import workspace agent options', () => {
       'claude-code': true,
       codex: true,
       openclaw: false,
-      hermes: false
+      hermes: false,
+      towa: false
     }
     expect(
       resolveWorkspaceAgentSelection(getWorkspaceAgentOptions(installed, ['codex']), 'codex')

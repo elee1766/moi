@@ -29,7 +29,7 @@ test('create blocks dismissal while submitting and permits it again after failur
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
   })
   const statuses = Object.fromEntries(
-    ['claude-code', 'codex', 'openclaw', 'hermes'].map(type => [
+    ['claude-code', 'codex', 'openclaw', 'hermes', 'towa'].map(type => [
       type,
       {
         availability:

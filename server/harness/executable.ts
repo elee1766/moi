@@ -55,6 +55,11 @@ const executableConfig: Record<HarnessType, ExecutableConfig> = {
     ],
     unavailableReason:
       'Run in terminal to install Hermes: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash'
+  },
+  towa: {
+    command: 'towa',
+    fallbackPaths: [join(homedir(), '.local', 'bin', 'towa'), join(homedir(), 'go', 'bin', 'towa')],
+    unavailableReason: harnessInstructionMessage('towa')
   }
 }
 
@@ -121,6 +126,7 @@ export async function detectInstalledHarnesses(path?: string): Promise<HarnessIn
     'claude-code': Boolean(findHarnessExecutable('claude-code', path)),
     codex: Boolean(findHarnessExecutable('codex', path)),
     openclaw: Boolean(findHarnessExecutable('openclaw', path)),
-    hermes: Boolean(findHarnessExecutable('hermes', path))
+    hermes: Boolean(findHarnessExecutable('hermes', path)),
+    towa: Boolean(findHarnessExecutable('towa', path))
   }
 }
