@@ -36,6 +36,7 @@ test('host bridge boots before React has been preloaded', async () => {
       }
       api.workspaceMembers.setAll([]);
       if (api.workspaceMembers.getRevision() <= revision) throw new Error('An empty sharing collection must advance the revision');
+      api.workspaceMembers.setAll([{ id: 'owner:shared', members: [], invitations: [] }]);
       process.exit(0);
     `
     const child = Bun.spawn([process.execPath, '--eval', source], {

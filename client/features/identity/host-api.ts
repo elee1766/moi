@@ -12,9 +12,10 @@ import type { WorkspaceMembers, WorkspaceMembersSnapshot } from '../collab/membe
 export type IdentityHostApi = {
   identity: { set: (identity: Identity | null) => void; getRevision: () => number }
   workspaceMembers: {
-    set: (workspaceId: string, data: WorkspaceMembers) => void
+    // Workspaces are named by address: `workspaceId`, or `ownerId:workspaceId` when shared.
+    set: (address: string, data: WorkspaceMembers) => void
     setAll: (workspaces: WorkspaceMembersSnapshot[]) => void
-    remove: (workspaceId: string) => void
+    remove: (address: string) => void
     clear: () => void
     getRevision: () => number
   }
