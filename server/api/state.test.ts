@@ -137,3 +137,40 @@ describe('workspace state API', () => {
     }
   })
 })
+
+test.each([false, true])('chat defaults stay in personal state (remote: %s)', async remote => {
+  const appConfig = await import('../app-config')
+  const layout = await import('../workspaces/layout')
+  const cloud = spyOn(appConfig, 'getAppConfig').mockReturnValue({
+    ...appConfig.getAppConfig(),
+    environment: 'cloud'
+  })
+  try {
+    if (remote)
+      await layout.initializeRemoteWorkspaceConfig(workspace.path, {
+        user_id: 'alice',
+        workspace_id: 'board'
+      })
+    else await layout.saveLayout(await layout.loadLayout(workspace.path), workspace.path)
+    expect((await state(call('/state'))).chatDefaults).toBeUndefined()
+    const before = await Bun.file(layout.getLayoutPath(workspace.path)).text()
+    const saved = await state(
+      call('/state/chat-defaults', 'PATCH', { model: 'sonnet', effort: 'high', speedMode: 'fast' })
+    )
+    expect(saved.chatDefaults).toEqual({ model: 'sonnet', effort: 'high', speedMode: 'fast' })
+    await call('/sessions/existing/config', 'PATCH', { model: 'opus' })
+    expect((await state(call('/state'))).sessions.existing?.config).toEqual({ model: 'opus' })
+    expect(
+      (await state(call('/state/chat-defaults', 'PATCH', { effort: null }))).chatDefaults
+    ).toEqual({ model: 'sonnet', speedMode: 'fast' })
+    expect((await call('/state/chat-defaults', 'PATCH', { speedMode: 'wrong' })).status).toBe(400)
+    setWorkspaceStateRoot(join(tempDir, 'state'))
+    expect((await state(call('/state'))).chatDefaults).toEqual({
+      model: 'sonnet',
+      speedMode: 'fast'
+    })
+    expect(await Bun.file(layout.getLayoutPath(workspace.path)).text()).toBe(before)
+  } finally {
+    cloud.mockRestore()
+  }
+})

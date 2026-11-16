@@ -61,10 +61,10 @@ const workspaces: WorkspaceEntry[] = [
 ]
 
 const layout: WorkspaceLayoutResponse = {
-  version: 1,
+  apiBase: `/api/workspaces/${WORKSPACE}`,
+  isRemote: false,
+  version: 2,
   widgetGrid: [{ i: '_moi_views', x: 0, y: 0 }],
-  layoutMode: 'split',
-  tabs: { open: ['overview', 'scratchpad'], active: 'overview' },
   name: WORKSPACE,
   cwd: DEV_CWD,
   provider: 'claude-code'
@@ -171,6 +171,8 @@ export const API: Record<string, unknown> = {
   '/api/settings': { showOnboarding: false, autoUpdateSkills: false } satisfies AppSettings,
   '/api/harnesses/status': HARNESSES,
   '/api/workspaces': workspaces,
+  '/cloud/api/workspaces/invitations': { invitations: [] },
+  '/cloud/api/workspaces/shared': { workspaces: [] },
   '/api/workspaces/discover': [],
   '/api/workspaces/previews': {
     [WORKSPACE]: {

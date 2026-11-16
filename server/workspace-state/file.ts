@@ -97,6 +97,8 @@ export function normalizeWorkspaceState(
   const state = emptyWorkspaceState(optionalString(value.workspacePath) ?? workspacePath)
   if (typeof value.revision === 'number' && Number.isSafeInteger(value.revision))
     state.revision = value.revision
+  if (isRecord(value.chatDefaults))
+    state.chatDefaults = normalizeSession({ config: value.chatDefaults }).config ?? {}
   const pinned = optionalString(value.pinnedSessionId)
   if (pinned) state.pinnedSessionId = pinned
   if (isRecord(value.selected)) {

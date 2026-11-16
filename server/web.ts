@@ -5,6 +5,8 @@ import type { ClientMessage, StatusSnapshotMessage } from '@/lib/types'
 import { isMoiContext } from '@/lib/moi-context'
 
 import { rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { startOperations, stopOperations } from './operations/server'
 
 import index from '../client/index.html'
 import devSandbox from '../client/dev/index.html'
@@ -25,7 +27,6 @@ import { allHarnesses, harnessFor } from './harness/registry'
 import { getWorkspace, listWorkspaces } from './workspaces/registry'
 import { failInterruptedViewStarts, sendWorkspaceMessage } from './sessions/view-sessions'
 import { prepareWorkspaceStates } from './workspace-state'
-import { migrateLegacyWorkspaceState } from './workspace-state/legacy-migration'
 import {
   addClient,
   broadcast,
@@ -55,7 +56,6 @@ function isClientMessage(value: unknown): value is ClientMessage {
     sessionId?: unknown
     content?: unknown
     isNew?: unknown
-    selectedSessionScope?: unknown
     optimisticId?: unknown
     model?: unknown
     effort?: unknown
@@ -71,9 +71,6 @@ function isClientMessage(value: unknown): value is ClientMessage {
       typeof v.content === 'string' &&
       typeof v.sessionId === 'string' &&
       typeof v.isNew === 'boolean' &&
-      (v.selectedSessionScope === undefined ||
-        v.selectedSessionScope === 'shared' ||
-        v.selectedSessionScope === 'browser-tab') &&
       (v.optimisticId === undefined || typeof v.optimisticId === 'string') &&
       (v.model === undefined || typeof v.model === 'string') &&
       (v.effort === undefined || typeof v.effort === 'string') &&
@@ -111,7 +108,6 @@ function upgrade(server: Upgradable, req: Request, data: WsData) {
 // WebSocket channels (which need Bun's native `server.upgrade` + pub/sub). Every
 // HTTP API route is delegated to the Hono app (`./api`) via `fetch`.
 const registeredWorkspaces = await listWorkspaces()
-await migrateLegacyWorkspaceState(registeredWorkspaces)
 await prepareWorkspaceStates(registeredWorkspaces)
 await Promise.all(registeredWorkspaces.map(failInterruptedViewStarts))
 
@@ -124,6 +120,10 @@ if (unixSocket) await rm(unixSocket, { force: true })
 const listen = unixSocket
   ? { unix: unixSocket }
   : { port: PORT, hostname: process.env.HOST ?? '127.0.0.1' }
+
+const operations = unixSocket
+  ? await startOperations(join(dirname(unixSocket), 'ops.sock'))
+  : undefined
 
 export const app = Bun.serve<WsData>({
   // Bun types the port and Unix-socket listeners as separate overloads, so a
@@ -246,7 +246,6 @@ export const app = Bun.serve<WsData>({
             workspacePath: workspace.path,
             sessionId: data.sessionId,
             isNew: data.isNew,
-            selectedSessionScope: data.selectedSessionScope,
             content: data.content.trim(),
             attachments: data.attachments,
             optimisticId: data.optimisticId,
@@ -321,6 +320,8 @@ async function shutdown() {
   shuttingDown = true
   try {
     app.stop(true)
+    operations?.stop(true)
+    stopOperations()
   } catch {}
   try {
     control.stop(true)

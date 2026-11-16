@@ -1,35 +1,57 @@
+import type { LayoutMode, WorkspaceTabsState } from '@/lib/types'
+import { createDefaultWorkspaceTabs } from '@/lib/workspace-layout'
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import type { StateStorage } from 'zustand/middleware'
 
 // Per-browser UI preferences and onboarding markers, persisted to localStorage
 // so they survive reloads. Server-backed per-user app state belongs in DATA_DIR.
+export type WorkspaceUi = {
+  // Open tabs and the tab a bare `/workspace/:id` lands on. Each window follows
+  // its own URL; the last window to change tabs decides what is saved.
+  tabs: WorkspaceTabsState
+  layoutMode: LayoutMode
+  dockedChatWidth: number
+  popupChatWidth: number
+}
+
+export const defaultWorkspaceUi: WorkspaceUi = {
+  tabs: createDefaultWorkspaceTabs(),
+  layoutMode: 'split',
+  dockedChatWidth: 360,
+  popupChatWidth: 440
+}
+
 type UiStore = {
+  workspaces: Record<string, WorkspaceUi>
+  setWorkspaceUi: (workspaceId: string, patch: Partial<WorkspaceUi>) => void
   discoveredWorkspacesOpen: boolean
   hasSentMessageFromMoi: boolean
   workspaceIdsPendingAnalysis: string[]
   composerDrafts: Record<string, string>
-  dockedChatWidth: number
-  popupChatWidth: number
   setDiscoveredWorkspacesOpen: (open: boolean) => void
   markWorkspacePendingAnalysis: (workspaceId: string) => void
   markMessageSentFromMoi: (workspaceId: string) => void
   setComposerDraft: (key: string, value: string | null) => void
   moveComposerDraft: (from: string, to: string) => void
-  setDockedChatWidth: (width: number) => void
-  setPopupChatWidth: (width: number) => void
 }
 
 export const createUiStore = (storage?: StateStorage) =>
   create<UiStore>()(
     persist(
       set => ({
+        workspaces: {},
+        setWorkspaceUi: (workspaceId, patch) =>
+          set(state => ({
+            workspaces: {
+              ...state.workspaces,
+              [workspaceId]: { ...defaultWorkspaceUi, ...state.workspaces[workspaceId], ...patch }
+            }
+          })),
         discoveredWorkspacesOpen: true,
         hasSentMessageFromMoi: false,
         workspaceIdsPendingAnalysis: [],
         composerDrafts: {},
-        dockedChatWidth: 360,
-        popupChatWidth: 440,
         setDiscoveredWorkspacesOpen: open => set({ discoveredWorkspacesOpen: open }),
         markWorkspacePendingAnalysis: workspaceId =>
           set(state => {
@@ -65,9 +87,7 @@ export const createUiStore = (storage?: StateStorage) =>
             composerDrafts[to] ??= composerDrafts[from]
             delete composerDrafts[from]
             return { composerDrafts }
-          }),
-        setDockedChatWidth: width => set({ dockedChatWidth: width }),
-        setPopupChatWidth: width => set({ popupChatWidth: width })
+          })
       }),
       {
         name: 'moi:ui',

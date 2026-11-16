@@ -16,9 +16,8 @@ beforeEach(() => {
   useUiStore.setState({
     hasSentMessageFromMoi: false,
     workspaceIdsPendingAnalysis: [],
-    composerDrafts: {},
-    dockedChatWidth: 360,
-    popupChatWidth: 440
+    workspaces: {},
+    composerDrafts: {}
   })
 })
 
@@ -59,8 +58,6 @@ describe('composer drafts', () => {
     const restoredStore = createUiStore(localStorage)
 
     expect(restoredStore.getState().composerDrafts).toEqual({})
-    expect(restoredStore.getState().dockedChatWidth).toBe(360)
-    expect(restoredStore.getState().popupChatWidth).toBe(440)
   })
 
   test('persists drafts per workspace and restores them in a new store', () => {
@@ -110,28 +107,6 @@ describe('pending view drafts', () => {
   })
 })
 
-describe('docked chat width', () => {
-  test('persists one width across stores', () => {
-    useUiStore.getState().setDockedChatWidth(412)
-
-    const restoredStore = createUiStore(localStorage)
-
-    expect(restoredStore.getState().dockedChatWidth).toBe(412)
-    expect(JSON.parse(storedValues.get('moi:ui') ?? '{}')).toMatchObject({
-      state: { dockedChatWidth: 412 }
-    })
-  })
-})
-
-test('popup width survives reloads independently of the sidebar width', () => {
-  useUiStore.getState().setPopupChatWidth(1000)
-  useUiStore.getState().setDockedChatWidth(412)
-
-  const restoredStore = createUiStore(localStorage)
-  expect(restoredStore.getState().popupChatWidth).toBe(1000)
-  expect(restoredStore.getState().dockedChatWidth).toBe(412)
-})
-
 test('a pending view draft follows chat creation and native renames, including empty text', () => {
   const draft = JSON.stringify(['ws-1', 'draft:views/cards'])
   const temporary = JSON.stringify(['ws-1', 'temporary'])
@@ -147,4 +122,32 @@ test('a pending view draft follows chat creation and native renames, including e
   })
   useUiStore.getState().moveComposerDraft(native, draft)
   expect(useUiStore.getState().composerDrafts[draft]).toBe('')
+})
+
+test('tabs and chat layout persist per workspace in one browser, independent of another', () => {
+  const tabs = { open: ['overview' as const, 'scratchpad' as const], active: 'scratchpad' as const }
+  const defaultTabs = { open: ['overview' as const], active: 'overview' as const }
+  const patch = {
+    tabs,
+    layoutMode: 'fullscreen' as const,
+    dockedChatWidth: 480,
+    popupChatWidth: 520
+  }
+  useUiStore.getState().setWorkspaceUi('one', patch)
+  useUiStore.getState().setWorkspaceUi('two', { popupChatWidth: 600 })
+  useUiStore.getState().setWorkspaceUi('one', { popupChatWidth: 560 })
+  const restored = createUiStore(localStorage).getState()
+  expect(restored.workspaces.one).toEqual({ ...patch, popupChatWidth: 560 })
+  expect(restored.workspaces.two).toEqual({
+    tabs: defaultTabs,
+    layoutMode: 'split',
+    dockedChatWidth: 360,
+    popupChatWidth: 600
+  })
+  const otherBrowser = createUiStore({
+    getItem: () => null,
+    setItem: () => {},
+    removeItem: () => {}
+  })
+  expect(otherBrowser.getState().workspaces).toEqual({})
 })

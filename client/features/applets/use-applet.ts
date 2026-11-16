@@ -1,6 +1,7 @@
+import { isRemoteWorkspace } from '@/client/features/workspace/remote'
 import type { ComponentType } from 'react'
 import { useRouter } from 'wouter'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
   type AppletSegment,
@@ -83,18 +84,29 @@ function loadApplet(
   return promise
 }
 
-function useApplet(kind: AppletKindSpec, name: string): AppletState {
+function useApplet(kind: AppletKindSpec, name: string, revision?: string): AppletState {
   const workspaceId = useWorkspaceId()
   const { base } = useRouter()
-  const [state, setState] = useState<AppletState>({ status: 'loading', version: 0 })
+  const key = appletKey(kind.segment, workspaceId, name)
+  const generation = useRef(0)
+  const [loaded, setLoaded] = useState<{ key: string; state: AppletState }>({
+    key,
+    state: { status: 'loading', version: 0 }
+  })
+  const state: AppletState = loaded.key === key ? loaded.state : { status: 'loading', version: 0 }
 
   const load = useCallback(() => {
-    setState(prev => ({ status: 'loading', version: prev.version }))
+    const request = ++generation.current
     loadApplet(kind, workspaceId, name, base)
-      .then(Component =>
-        setState(prev => ({ status: 'ready', Component, version: prev.version + 1 }))
-      )
+      .then(Component => {
+        if (request !== generation.current) return
+        setLoaded(prev => ({
+          key,
+          state: { status: 'ready', Component, version: prev.state.version + 1 }
+        }))
+      })
       .catch(err => {
+        if (request !== generation.current) return
         // Journal the load failure so `moi debug logs` can surface it to the
         // agent — otherwise only this tab ever sees it (docs/self-correction.md).
         reportAppletError(workspaceId, {
@@ -104,12 +116,22 @@ function useApplet(kind: AppletKindSpec, name: string): AppletState {
           message: String(err),
           ...(err instanceof Error && err.stack ? { stack: err.stack } : {})
         })
-        setState(prev => ({ status: 'error', error: String(err), version: prev.version + 1 }))
+        setLoaded(prev =>
+          prev.key === key && prev.state.status === 'ready'
+            ? prev
+            : {
+                key,
+                state: { status: 'error', error: String(err), version: prev.state.version + 1 }
+              }
+        )
       })
-  }, [base, kind, workspaceId, name])
+  }, [base, kind, workspaceId, name, key])
 
   useEffect(() => {
     load()
+    return () => {
+      generation.current++
+    }
   }, [load])
 
   // Reload the MOUNTED applet the moment the server says its bundle changed or
@@ -125,15 +147,29 @@ function useApplet(kind: AppletKindSpec, name: string): AppletState {
     }
   })
 
+  // Owner events don't reach visitors yet. The applet lists refetch on window
+  // focus and carry each bundle's revision, so a remote applet reloads only when
+  // its build changed: a reload remounts it and keeps the old module in memory.
+  const remote = isRemoteWorkspace(workspaceId)
+  const seen = useRef({ key, revision })
+  useEffect(() => {
+    const previous = seen.current
+    seen.current = { key, revision }
+    if (!remote || previous.key !== key || previous.revision === revision) return
+    if (previous.revision === undefined || revision === undefined) return
+    invalidateApplet(kind.segment, workspaceId, name)
+    load()
+  }, [remote, key, revision, kind.segment, workspaceId, name, load])
   return state
 }
 
-export function useWidget(name: string): AppletState {
-  return useApplet(WIDGET_KIND, name)
+// `revision` is the bundle revision from the widgets/views list.
+export function useWidget(name: string, revision?: string): AppletState {
+  return useApplet(WIDGET_KIND, name, revision)
 }
 
-export function useView(name: string): AppletState {
-  return useApplet(VIEW_KIND, name)
+export function useView(name: string, revision?: string): AppletState {
+  return useApplet(VIEW_KIND, name, revision)
 }
 
 // Mount once per workspace (in the workspace route). Invalidates the shared
