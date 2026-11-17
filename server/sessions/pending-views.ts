@@ -3,6 +3,7 @@ import { newViewId } from '@/lib/ids'
 import type { PendingView, WorkspaceEntry, WorkspaceState } from '@/lib/types'
 import { readWorkspaceState, updateWorkspaceState, type WorkspaceRef } from '../workspace-state'
 import { requestWorkspace } from '../workspaces/api'
+import { cloudRoutes } from '../remote/routes'
 import { archiveViewSessions } from './archive'
 
 export class PendingViewError extends Error {
@@ -114,7 +115,7 @@ export async function completeViewBuild(ws: WorkspaceRef, id: string) {
 export async function completeRemoteViewBuilds(ws: WorkspaceEntry, request = requestWorkspace) {
   if (!ws.remote) return
   if (!Object.keys((await readWorkspaceState(ws)).pendingViews).length) return
-  const response = await request({ remote: ws.remote }, '/views', { method: 'GET' })
+  const response = await request(cloudRoutes.compiledViews.path(ws.remote), { method: 'GET' })
   if (!response.ok) throw new Error(`Could not list the owner's views (${response.status})`)
   const { views } = (await response.json()) as { views: { id: string }[] }
   const compiled = new Set(views.map(view => view.id))
