@@ -3,6 +3,31 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+test('remote rejects the removed path option before running commands', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'moi-removed-path-'))
+  try {
+    for (const args of [
+      ['--path', directory],
+      ['write', 'notes.txt', 'content', `--path=${directory}`]
+    ]) {
+      const child = Bun.spawn(
+        [process.execPath, join(import.meta.dir, '../../cli.ts'), 'remote', ...args],
+        {
+          cwd: directory,
+          env: { ...Bun.env, MOI_DATA_DIR: directory, NO_COLOR: '1' },
+          stdout: 'pipe',
+          stderr: 'pipe'
+        }
+      )
+      const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+      expect(code).toBe(1)
+      expect(stderr).toContain('Unknown option --path')
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test('remote after logout gives a concise sign-in message without a stack trace', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'moi-remote-cli-'))
   try {
@@ -57,6 +82,7 @@ test('profile names cannot inject terminal commands', async () => {
       JSON.stringify({ accessToken: jwt, refreshToken: 'unused', url, clientId: 'moi-cli' })
     )
     const child = Bun.spawn([process.execPath, join(import.meta.dir, '../../cli.ts'), 'remote'], {
+      cwd: directory,
       env: { ...Bun.env, MOI_DATA_DIR: directory, NO_COLOR: '1' },
       stdout: 'pipe',
       stderr: 'pipe'
@@ -72,7 +98,8 @@ test('profile names cannot inject terminal commands', async () => {
   }
 })
 
-test('human CLI login, status, invitations, acceptance and logout', async () => {
+// This flow starts multiple real CLI processes; allow for slower CI startup.
+test('human CLI login, status, workspaces, invitations, acceptance and logout', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'moi-human-commands-'))
   let accepted = false,
     revoked = false,
@@ -106,19 +133,25 @@ test('human CLI login, status, invitations, acceptance and logout', async () => 
         return Response.json({ id: 'human', name: 'Alex', email: 'alex@example.com' })
       if (path.endsWith('/workspaces/shared')) {
         sharedReads++
-        return Response.json({ workspaces: [] })
+        return Response.json({
+          workspaces: accepted
+            ? [{ id: 'board', owner: { id: 'owner', name: 'Owner', email: 'owner@example.com' } }]
+            : []
+        })
       }
       if (path.endsWith('/workspaces/invitations'))
         return Response.json({
-          invitations: [
-            {
-              id: 'invite',
-              workspaceId: 'board',
-              workspaceName: 'Board',
-              inviter: { id: 'owner', name: 'Owner', email: 'owner@example.com' },
-              expiresAt: new Date(Date.now() + 60000).toISOString()
-            }
-          ]
+          invitations: accepted
+            ? []
+            : [
+                {
+                  id: 'invite',
+                  workspaceId: 'board',
+                  workspaceName: 'Board',
+                  inviter: { id: 'owner', name: 'Owner', email: 'owner@example.com' },
+                  expiresAt: new Date(Date.now() + 60000).toISOString()
+                }
+              ]
         })
       if (path.endsWith('/invitations/invite/accept')) {
         accepted = true
@@ -136,10 +169,12 @@ test('human CLI login, status, invitations, acceptance and logout', async () => 
       join(directory, 'config.json'),
       JSON.stringify({ remote: { url: server.url.origin + '/cloud' } })
     )
+    let lastStderr = ''
     async function cli(args: string[]) {
       const child = Bun.spawn(
         [process.execPath, join(import.meta.dir, '../../cli.ts'), 'remote', ...args],
         {
+          cwd: directory,
           env: { ...Bun.env, MOI_DATA_DIR: directory, NO_COLOR: '1' },
           stdout: 'pipe',
           stderr: 'pipe'
@@ -150,21 +185,44 @@ test('human CLI login, status, invitations, acceptance and logout', async () => 
         new Response(child.stdout).text(),
         new Response(child.stderr).text()
       ])
+      lastStderr = stderr
       expect(code).toBe(0)
       expect(stderr).not.toContain('error:')
       return stdout
     }
-    expect(await cli(['login', '--no-browser'])).toContain('Congratulations!')
+    expect(await cli(['login', '--no-browser'])).toContain('Signed in as alex@example.com')
+    expect(await cli([])).toContain('This folder is not linked to a remote workspace')
+    expect(lastStderr).not.toContain('Moi skill outdated')
     expect(JSON.parse(await cli(['--json'])).me.id).toBe('human')
     expect(JSON.parse(await cli(['invitations', '--json']))).toHaveLength(1)
+    const pendingJson = JSON.parse(await cli(['workspaces', '--json']))
+    expect(pendingJson.workspaces).toEqual([])
+    expect(pendingJson.invitations[0].id).toBe('invite')
     const beforeAcceptance = sharedReads
     expect(JSON.parse(await cli(['accept', 'invite', '--json'])).remote).toEqual({
       user_id: 'owner',
       workspace_id: 'board'
     })
-    expect(await cli(['accept', 'invite'])).toContain('moi init --remote owner:board')
+    expect(await cli(['accept', 'invite'])).toContain(
+      'moi init ./workspace-folder --remote owner:board'
+    )
     expect(accepted).toBe(true)
     expect(sharedReads).toBe(beforeAcceptance)
+    expect(await cli(['workspaces'])).toContain('owner:board')
+    await Bun.write(
+      join(directory, '.moi/.workspace.json'),
+      JSON.stringify({
+        version: 2,
+        remote: { user_id: 'owner', workspace_id: 'board' }
+      })
+    )
+    expect(await cli([])).toContain('Remote ID: owner:board')
+    await Bun.write(
+      join(directory, '.agents/skills/moi-workspace/SKILL.md'),
+      '<moi-skill version="0.1.0" />'
+    )
+    expect(JSON.parse(await cli(['--json'])).currentWorkspace.workspace_id).toBe('board')
+    expect(lastStderr).toContain('Moi skill outdated')
     await cli(['logout'])
     expect(revoked).toBe(true)
     expect(await Bun.file(join(directory, 'remote-auth.json')).exists()).toBe(false)
@@ -172,7 +230,7 @@ test('human CLI login, status, invitations, acceptance and logout', async () => 
     server.stop(true)
     await rm(directory, { recursive: true, force: true })
   }
-})
+}, 20_000)
 
 test('invalid or unauthenticated acceptance leaves credentials untouched', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'moi-accept-signed-out-'))

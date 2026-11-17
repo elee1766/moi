@@ -1,3 +1,4 @@
+import { sendWorkspaceMessage } from './send-message'
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import {
   DEFAULT_WORKSPACE_STATE_ROOT,
@@ -13,12 +14,7 @@ import { renderMoiContext } from '@/lib/moi-context'
 import { allHarnesses, harnessFor } from '../harness/registry'
 import type { SendMessageInput } from '../harness/types'
 import { ForkUnsupportedError } from '../harness/fork'
-import {
-  createViewFromSession,
-  submitView,
-  sendWorkspaceMessage,
-  failInterruptedViewStarts
-} from './view-sessions'
+import { createViewFromSession, submitView, failInterruptedViewStarts } from './view-sessions'
 import {
   createPendingView,
   getPendingView,
@@ -857,4 +853,19 @@ test('rejected ordinary sends do not mark a pending view submitted', async () =>
     })
   ).rejects.toThrow('Unavailable')
   expect((await getPendingView(ws, view.id))?.status).toBe('draft')
+})
+
+test('workspace mode comes from the server for local and remote sends', async () => {
+  for (const remote of [undefined, { user_id: 'owner', workspace_id: 'shared' }]) {
+    ws.remote = remote
+    await sendWorkspaceMessage(ws, {
+      workspaceId: ws.id,
+      workspacePath: ws.path,
+      sessionId: 'source',
+      isNew: false,
+      content: 'Hello',
+      context: { workspaceMode: remote ? 'local' : 'remote' }
+    })
+    expect(sent.at(-1)?.context?.workspaceMode).toBe(remote ? 'remote' : 'local')
+  }
 })

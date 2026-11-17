@@ -4,6 +4,10 @@ The Scratchpad is the workspace's **shared whiteboard** — one freeform tldraw 
 draws on by hand and you drive through `moi scratch`. Same canvas, two authors; disk is the
 source of truth. Use it to sketch, diagram, annotate the user's drawing, or lay out boxes.
 
+In a remote workspace, run commands from the linked dir: reads and edits use the owner's canvas,
+while `moi scratch view` uses your local Moi and browser. Image input and output paths stay local:
+`add image` uploads to the owner; `read-image` and `view --out` save locally.
+
 ## Seeing
 
 **Always inspect the canvas through the commands below — never open, `cat`, `read`, or parse the
