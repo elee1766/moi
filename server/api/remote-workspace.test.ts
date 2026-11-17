@@ -6,7 +6,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify, parse } from 'devalue'
 import { api } from './index'
-import { DEFAULT_REGISTRY_PATH, registerWorkspace, setRegistryPath } from '../workspaces/registry'
+import {
+  DEFAULT_REGISTRY_PATH,
+  getWorkspace,
+  registerWorkspace,
+  setRegistryPath
+} from '../workspaces/registry'
+import { completeRemoteViewBuilds } from '../sessions/pending-views'
 import { loadLayout, saveLayout } from '../workspaces/layout'
 import { buildAllViews } from '../applets/views'
 import { killAllWorkers } from '../applets/functions'
@@ -156,12 +162,80 @@ test('remote bundle RPC reads and writes owner data; assets and validators retai
 test('remote reference serves no shared content and keeps personal state local', async () => {
   for (const path of ['/widgets', '/views', '/scratchpad', '/config'])
     expect([path, (await api.request(local + path)).status]).toEqual([path, 404])
-  expect((await api.request(`${local}/views`, { method: 'POST' })).status).toBe(404)
   expect((await api.request(local, { method: 'DELETE' })).status).toBe(403)
-  // Chat state is the visitor's own and never leaves this Moi.
-  expect((await api.request(`${local}/state`)).status).toBe(200)
+  // Chat state, the agent and what it runs with are the visitor's own and never leave this Moi.
+  for (const path of ['/state', '/env', '/skills'])
+    expect([path, (await api.request(local + path)).status]).toEqual([path, 200])
   const previews = await (await api.request('/api/workspaces/previews')).json()
   expect(previews[visitorId]).toEqual({ thumbnails: [] })
+})
+
+test('shared routes reject a remote reference before reading request data', async () => {
+  const routes = [
+    ['GET', '/widgets/card/module'],
+    ['GET', '/views/board/module'],
+    ['GET', '/files/private.txt'],
+    ['POST', '/rpc/board/read'],
+    ['POST', '/applet-log'],
+    ['PUT', '/config'],
+    ['POST', '/scratchpad/ops'],
+    ['PUT', '/scratchpad'],
+    ['POST', '/scratchpad/assets'],
+    ['GET', '/scratchpad/assets/photo.png'],
+    ['PUT', '/icon'],
+    ['DELETE', '/icon'],
+    ['GET', '/applet-thumbnails'],
+    ['GET', '/applet-thumbnails/view/board'],
+    ['PUT', '/applet-thumbnails']
+  ] as const
+  for (const [method, path] of routes) {
+    const response = await api.request(local + path, { method })
+    expect([method, path, response.status, await response.text()]).toEqual([
+      method,
+      path,
+      404,
+      'Use the owner workspace address'
+    ])
+  }
+})
+
+test('a view being built stays with the visitor until the owner lists it as compiled', async () => {
+  const pendingIds = async () =>
+    Object.keys((await (await api.request(`${local}/state`)).json()).pendingViews)
+  const created = await api.request(`${local}/views`, { method: 'POST' })
+  expect(created.status).toBe(201)
+  const { id } = await created.json()
+  expect(await pendingIds()).toEqual([id])
+  expect(Object.keys((await (await api.request(`${base}/state`)).json()).pendingViews)).toEqual([])
+  const patch = (body: unknown) => ({ ...put(body), method: 'PATCH' })
+  expect((await api.request(`${local}/views/${id}`, patch({ title: 'Launch plan' }))).status).toBe(
+    200
+  )
+  // Compiled views are the owner's: the reference neither renames nor deletes them.
+  expect((await api.request(`${local}/views/compiled`, patch({ title: 'Mine' }))).status).toBe(404)
+  expect((await api.request(`${local}/views/compiled`, { method: 'DELETE' })).status).toBe(404)
+  const reference = (await getWorkspace(visitorId))!
+  const ownerLists =
+    (...ids: string[]) =>
+    async () =>
+      Response.json({ views: ids.map(id => ({ id })) })
+  await completeRemoteViewBuilds(reference, ownerLists('compiled'))
+  expect(await pendingIds()).toEqual([id])
+  await completeRemoteViewBuilds(reference, ownerLists('compiled', id))
+  expect(await pendingIds()).toEqual([])
+})
+
+test('a remote reference reports and changes the visitor’s own agent', async () => {
+  expect((await (await api.request(local)).json()).harness).toBeUndefined()
+  const changed = await api.request(`${local}/harness`, {
+    ...put({ harness: 'codex' }),
+    method: 'PATCH'
+  })
+  expect(changed.status).toBe(200)
+  expect(await (await api.request(local)).json()).toMatchObject({
+    isRemote: true,
+    harness: 'codex'
+  })
 })
 
 test('remote scratchpad documents and assets stay on the owner', async () => {
@@ -238,7 +312,8 @@ test('standalone hides remote registrations and refuses remote opening', async (
     environment: 'local'
   })
   try {
-    expect((await api.request(local)).status).toBe(403)
+    for (const path of ['', '/state', '/widgets'])
+      expect((await api.request(local + path)).status).toBe(403)
     expect(
       (await (await api.request('/api/workspaces')).json()).some(
         (entry: { id: string }) => entry.id === visitorId
@@ -289,7 +364,8 @@ test('remote registration reuses the existing reference and validates its input'
     { remote: null },
     { remote: {} },
     { remote, path: owner },
-    { remote, type: 'claude-code' }
+    { remote, harness: 'openclaw' },
+    { remote, harness: 'unknown' }
   ]) {
     expect((await register(body)).status).toBe(400)
   }

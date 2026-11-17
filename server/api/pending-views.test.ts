@@ -47,7 +47,7 @@ describe('pending view sketch submission', () => {
   test('accepts a sketch-only first message and forwards its context', async () => {
     const workspacePath = join(tempDir, 'workspace')
     await mkdir(workspacePath)
-    const workspace = await registerWorkspace(workspacePath, { type: 'codex' })
+    const workspace = await registerWorkspace(workspacePath, { harness: 'codex' })
     const createResponse = await api.request(`/api/workspaces/${workspace.id}/views`, {
       method: 'POST'
     })
@@ -77,6 +77,10 @@ describe('pending view sketch submission', () => {
 
     if (!response.ok) throw new Error(await response.text())
     expect(response.status).toBe(200)
+    const result = await response.json()
+    expect(result.state.selected[viewTabId(draft.id)]).toBe(result.sessionId)
+    expect(result.state.pendingViews[draft.id].buildSessionId).toBe(result.sessionId)
+    expect(result.state.revision).toBeGreaterThan(0)
     expect(sent[0]?.attachments).toEqual([{ type: 'upload', uploadId: upload.id }])
     expect(sent[0]?.content).toBe('')
     expect(sent[0]?.context?.directives).toContain(
@@ -87,7 +91,7 @@ describe('pending view sketch submission', () => {
   test.each([false, true])('forwards context with optional file uploads: %s', async withUpload => {
     const workspacePath = join(tempDir, 'workspace')
     await mkdir(workspacePath)
-    const workspace = await registerWorkspace(workspacePath, { type: 'codex' })
+    const workspace = await registerWorkspace(workspacePath, { harness: 'codex' })
     const created = await api.request(`/api/workspaces/${workspace.id}/views`, {
       method: 'POST'
     })
@@ -124,7 +128,7 @@ describe('pending view sketch submission', () => {
   })
 
   test('rejects a first message with neither text nor a sketch', async () => {
-    const workspace = await registerWorkspace(join(tempDir, 'workspace'), { type: 'codex' })
+    const workspace = await registerWorkspace(join(tempDir, 'workspace'), { harness: 'codex' })
     const createResponse = await api.request(`/api/workspaces/${workspace.id}/views`, {
       method: 'POST'
     })
@@ -141,7 +145,7 @@ describe('pending view sketch submission', () => {
   })
 
   test('rejects malformed sketch upload ids', async () => {
-    const workspace = await registerWorkspace(join(tempDir, 'workspace'), { type: 'codex' })
+    const workspace = await registerWorkspace(join(tempDir, 'workspace'), { harness: 'codex' })
     const createResponse = await api.request(`/api/workspaces/${workspace.id}/views`, {
       method: 'POST'
     })
@@ -163,7 +167,7 @@ describe('pending view sketch submission', () => {
 
 describe('pending view availability', () => {
   test('rejects submission before starting a view build', async () => {
-    const workspace = await registerWorkspace(join(tempDir, 'workspace'), { type: 'codex' })
+    const workspace = await registerWorkspace(join(tempDir, 'workspace'), { harness: 'codex' })
     const createResponse = await api.request(`/api/workspaces/${workspace.id}/views`, {
       method: 'POST'
     })
@@ -193,7 +197,7 @@ describe('pending view chat selection', () => {
   test.each([undefined, 'other-chat'])(
     'publishes the new chat selection (previous: %s)',
     async previous => {
-      const workspace = await registerWorkspace(join(tempDir, 'workspace'), { type: 'codex' })
+      const workspace = await registerWorkspace(join(tempDir, 'workspace'), { harness: 'codex' })
       const createResponse = await api.request(`/api/workspaces/${workspace.id}/views`, {
         method: 'POST'
       })

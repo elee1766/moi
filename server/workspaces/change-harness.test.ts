@@ -1,4 +1,4 @@
-import '../api/index'
+import { api } from '../api/index'
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, readlink, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import * as executable from '../harness/executable'
 import { claudeCodeHarness } from '../harness/claude-code'
 import { changeWorkspaceHarness } from './change-harness'
-import { reserveWorkspaceOperation } from './harness-transition'
+import { reserveWorkspaceOperation, withHarnessTransition } from './harness-transition'
 import {
   DEFAULT_REGISTRY_PATH,
   getWorkspace,
@@ -36,7 +36,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true })
 })
 test('switches in place and preserves metadata while resetting selections and pending builds', async () => {
-  const ws = await registerWorkspace(root, { type: 'claude-code', name: 'My workspace' })
+  const ws = await registerWorkspace(root, { harness: 'claude-code', name: 'My workspace' })
   await updateWorkspaceState(ws, state => {
     state.chatDefaults = { model: 'old-default', effort: 'high', speedMode: 'fast' }
     state.selected.overview = 'old'
@@ -49,7 +49,7 @@ test('switches in place and preserves metadata while resetting selections and pe
     }
   })
   const next = await changeWorkspaceHarness(ws, 'codex')
-  expect(next).toMatchObject({ id: ws.id, path: root, name: ws.name, type: 'codex' })
+  expect(next).toMatchObject({ id: ws.id, path: root, name: ws.name, harness: 'codex' })
   const state = await readWorkspaceState(ws)
   expect(state.chatDefaults).toEqual({})
   expect(state.selected).toEqual({})
@@ -58,25 +58,25 @@ test('switches in place and preserves metadata while resetting selections and pe
   expect(state.pendingViews.view).toEqual({ requirements: 'A dashboard', status: 'draft' })
   // A later choice wins even when its caller still holds the original registration.
   await changeWorkspaceHarness(ws, 'claude-code')
-  expect((await getWorkspace(ws.id))?.type).toBe('claude-code')
+  expect((await getWorkspace(ws.id))?.harness).toBe('claude-code')
   expect((await listWorkspaces()).map(entry => entry.id)).toEqual([ws.id])
 })
 test('rejects reserved startup without changing registration', async () => {
-  const ws = await registerWorkspace(root, { type: 'claude-code' })
+  const ws = await registerWorkspace(root, { harness: 'claude-code' })
   const release = reserveWorkspaceOperation(ws.id)
   try {
     await expect(changeWorkspaceHarness(ws, 'codex')).rejects.toThrow('busy')
   } finally {
     release()
   }
-  expect((await getWorkspace(ws.id))?.type).toBe('claude-code')
+  expect((await getWorkspace(ws.id))?.harness).toBe('claude-code')
 })
 test('rejects provider-owned workspaces', async () => {
-  const ws = await registerWorkspace(root, { type: 'hermes' })
+  const ws = await registerWorkspace(root, { harness: 'hermes' })
   await expect(changeWorkspaceHarness(ws, 'codex')).rejects.toThrow('cannot be changed')
 })
 test('rejects active sessions', async () => {
-  const ws = await registerWorkspace(root, { type: 'claude-code' })
+  const ws = await registerWorkspace(root, { harness: 'claude-code' })
   const active = spyOn(claudeCodeHarness, 'activeSessions').mockReturnValue([
     { workspaceId: ws.id, sessionId: 'running', activity: 'running' }
   ])
@@ -88,12 +88,12 @@ test('rejects active sessions', async () => {
 })
 
 test('switches to an uninstalled agent so workspace setup can offer installation', async () => {
-  const ws = await registerWorkspace(root, { type: 'claude-code' })
+  const ws = await registerWorkspace(root, { harness: 'claude-code' })
   const unavailable = spyOn(executable, 'findHarnessExecutable').mockReturnValue(null)
   try {
     const updated = await changeWorkspaceHarness(ws, 'codex')
-    expect(updated.type).toBe('codex')
-    expect((await getWorkspace(ws.id))?.type).toBe('codex')
+    expect(updated.harness).toBe('codex')
+    expect((await getWorkspace(ws.id))?.harness).toBe('codex')
   } finally {
     unavailable.mockRestore()
   }
@@ -101,7 +101,7 @@ test('switches to an uninstalled agent so workspace setup can offer installation
 
 test('restores selection when registration persistence fails', async () => {
   const registry = await import('./registry')
-  const ws = await registerWorkspace(root, { type: 'claude-code' })
+  const ws = await registerWorkspace(root, { harness: 'claude-code' })
   await updateWorkspaceState(ws, state => {
     state.chatDefaults = { model: 'kept-model' }
     state.selected.overview = 'kept'
@@ -112,7 +112,7 @@ test('restores selection when registration persistence fails', async () => {
   )
   try {
     await expect(changeWorkspaceHarness(ws, 'codex')).rejects.toThrow('Disk failure')
-    expect((await getWorkspace(ws.id))?.type).toBe('claude-code')
+    expect((await getWorkspace(ws.id))?.harness).toBe('claude-code')
     const state = await readWorkspaceState(ws)
     expect(state.chatDefaults).toEqual({ model: 'kept-model' })
     expect(state.selected.overview).toBe('kept')
@@ -126,7 +126,7 @@ test('prepares missing skills once, shares concurrent preparation, and retries f
   const { prepareWorkspaceHarness } = await import('./change-harness')
   const skills = await import('../skills/update')
   const template = await import('../skills/workspace')
-  const ws = await registerWorkspace(root, { type: 'codex' })
+  const ws = await registerWorkspace(root, { harness: 'codex' })
   const status = spyOn(skills, 'getWorkspaceSkillsStatus').mockResolvedValue({
     skills: [
       {
@@ -154,10 +154,10 @@ test('prepares missing skills once, shares concurrent preparation, and retries f
   }
 })
 
-for (const type of ['claude-code', 'codex'] as const) {
-  test(`preparing ${type} installs the shared skill and Claude link`, async () => {
+for (const harness of ['claude-code', 'codex'] as const) {
+  test(`preparing ${harness} installs the shared skill and Claude link`, async () => {
     const { prepareWorkspaceHarness } = await import('./change-harness')
-    const ws = await registerWorkspace(root, { type })
+    const ws = await registerWorkspace(root, { harness: harness })
     await prepareWorkspaceHarness(ws)
     expect(
       await Bun.file(join(root, '.agents', 'skills', 'moi-workspace', 'SKILL.md')).exists()
@@ -167,3 +167,37 @@ for (const type of ['claude-code', 'codex'] as const) {
     )
   })
 }
+
+test('the harness route uses its own lock and still refuses an active operation', async () => {
+  const ws = await registerWorkspace(root, { harness: 'claude-code' })
+  const change = () =>
+    api.request(`/api/workspaces/${ws.id}/harness`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ harness: 'codex' })
+    })
+  const release = reserveWorkspaceOperation(ws.id)
+  try {
+    expect((await change()).status).toBe(409)
+  } finally {
+    release()
+  }
+  expect((await change()).status).toBe(200)
+  expect((await getWorkspace(ws.id))?.harness).toBe('codex')
+})
+
+test('a view named harness cannot bypass the operation lock', async () => {
+  const ws = await registerWorkspace(root, { harness: 'claude-code' })
+  await updateWorkspaceState(ws, state => {
+    state.pendingViews.harness = { status: 'draft', requirements: '' }
+  })
+  await withHarnessTransition(ws, async () => {
+    const response = await api.request(`/api/workspaces/${ws.id}/views/harness`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Changed' })
+    })
+    expect(response.status).toBe(409)
+  })
+  expect((await readWorkspaceState(ws)).pendingViews.harness?.title).toBeUndefined()
+})
