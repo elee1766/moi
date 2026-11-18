@@ -44,9 +44,9 @@ export function UserAvatar({
   return (
     <Avatar size={size} aria-label={name} className={cn('after:border-0', className)}>
       {user?.avatar && <AvatarImage src={user.avatar} alt="" />}
-      <AvatarFallback className={agent ? 'bg-transparent' : undefined}>
+      <AvatarFallback className={agent ? 'bg-muted' : undefined}>
         {agent ? (
-          <IconRobotFace size={size === 'xs' ? 12 : 16} stroke={1.75} />
+          <IconRobotFace className="text-foreground" size={size === 'xs' ? 12 : 16} stroke={1.75} />
         ) : user ? (
           <Blobatar
             className="scale-150"
