@@ -11,11 +11,9 @@ if (!process.versions.bun) {
   process.exit(1)
 }
 
-// The widget bundler needs Bun 1.3: it hands `Bun.build` a virtual entrypoint
-// that only 1.3+ lets a plugin resolve. Older Bun starts fine and then fails on
-// the first widget build, so reject it here where the cause is still legible.
-// `?.` because a Bun without `Bun.semver` is old enough to reject anyway.
-const MIN_BUN = '1.3.0'
+// The standalone OpenClaw client uses Node's WebSocket upgrade path, which
+// fails on Bun 1.3. Reject old runtimes before they fail during connection.
+const MIN_BUN = '1.4.0'
 if (!Bun.semver?.satisfies(Bun.version, `>=${MIN_BUN}`)) {
   console.error(`Moi requires Bun ${MIN_BUN} or newer (this is Bun ${Bun.version}).`)
   console.error('Upgrade Bun:  bun upgrade')
@@ -35,4 +33,10 @@ if (!Bun.which('moi')) {
   console.error('  bun i -g moi-computer\n')
 }
 
-await import('../server/cli.ts')
+// Prefer source in a checkout, including after packing for a release test.
+const source = new URL('../server/cli.ts', import.meta.url)
+await import(
+  (await Bun.file(source).exists())
+    ? source.href
+    : new URL('../runtime/cli.js', import.meta.url).href
+)

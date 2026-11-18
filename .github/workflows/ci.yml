@@ -62,6 +62,7 @@ jobs:
             echo "::error::tarball contains sensitive files"
             exit 1
           fi
+          grep -q '^package/runtime/cli.js$' "$RUNNER_TEMP/package-files.txt"
 
   windows-tests:
     name: Tests (Windows)
