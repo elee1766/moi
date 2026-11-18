@@ -11,13 +11,14 @@ import type { SpeedMode } from '@/lib/types'
 import { isSpeedMode } from '@/lib/speed-mode'
 import { isMessageAttachments } from '@/lib/message-attachments'
 import { Hono } from 'hono'
+import { z } from 'zod'
+import { AGENT_THEMES, COLOR_THEMES, FONT_THEMES, RADIUS_THEMES } from '@/lib/themes'
 import { serveStatic } from 'hono/bun'
 import { createMiddleware } from 'hono/factory'
 import { existsSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 
 import { UPDATE_ACTIVE_AGENT_MESSAGE } from '@/lib/update'
-import { resolveWorkspaceTheme } from '@/lib/themes'
 import { isWorkspaceIcon } from '@/lib/workspace-icon'
 import type {
   AppletKind,
@@ -43,12 +44,7 @@ import { applyEnvChanged } from '../workspaces/env-apply'
 import { publishEvent } from '../events'
 import { callFunction, parseFunctionPath } from '../applets/functions'
 import { processIcon } from '../workspaces/icon'
-import {
-  getWorkspacePreview,
-  loadLayout,
-  mergeLayoutForSave,
-  saveLayout
-} from '../workspaces/layout'
+import { getWorkspacePreview, mergeLayoutForSave, updateLayout } from '../workspaces/layout'
 import {
   getAppletThumbnailRecords,
   isValidAppletId,
@@ -512,7 +508,7 @@ one.get('/uploads/:uploadId', personalWorkspace, c => {
   })
 })
 
-// Personal state writes return the latest snapshot and publish `state:changed`.
+// Personal state writes return the latest snapshot and publish `personal-state:changed`.
 one.get('/state', personalWorkspace, async c => c.json(await getWorkspaceState(c.get('ws'))))
 
 one.put('/state/tabs', personalWorkspace, async c => {
@@ -767,9 +763,7 @@ one.get('/harness', personalWorkspace, async c => {
     // Gateway-backed harnesses still have workspace-specific readiness.
     harness.authStatus && !hasAuthOverrides
       ? Promise.resolve({ status: 'available' as const })
-      : refresh
-        ? harnessStore.refresh(ws)
-        : harnessStore.getAvailability(ws),
+      : harnessStore.getAvailability(ws, refresh),
     harness.listModels(ws).catch(err => {
       console.error(`[api] listModels failed for ${harness.id}`, err)
       return []
@@ -807,7 +801,11 @@ one.put('/config', ownerWorkspace, async c => {
     return c.text('Expected a workspace config field', 400)
   }
   await setWorkspaceConfig(ws.path, { name, icon })
-  publishEvent({ type: 'workspace:updated', workspaceId: ws.id, origin: eventOrigin(body.origin) })
+  publishEvent({
+    type: 'workspace-config:changed',
+    workspaceId: ws.id,
+    origin: eventOrigin(body.origin)
+  })
   return c.json(await getWorkspaceConfig(ws.path))
 })
 
@@ -847,7 +845,7 @@ one.put('/scratchpad', ownerWorkspace, async c => {
   }
   await saveScratchpadDoc(body.document, ws.path)
   publishEvent({
-    type: 'scratchpad:updated',
+    type: 'scratchpad:changed',
     workspaceId: ws.id,
     origin: eventOrigin(body.origin)
   })
@@ -906,13 +904,13 @@ one.put('/icon', ownerWorkspace, async c => {
   }
   const workspaceIcon = { type: 'upload', value: icon } as const
   await setWorkspaceConfig(ws.path, { icon: workspaceIcon })
-  publishEvent({ type: 'workspace:updated', workspaceId: c.get('ws').id })
+  publishEvent({ type: 'workspace-config:changed', workspaceId: c.get('ws').id })
   return c.json({ icon: workspaceIcon })
 })
 
 one.delete('/icon', ownerWorkspace, async c => {
   await setWorkspaceConfig(c.get('ws').path, { icon: null })
-  publishEvent({ type: 'workspace:updated', workspaceId: c.get('ws').id })
+  publishEvent({ type: 'workspace-config:changed', workspaceId: c.get('ws').id })
   return c.body(null, 204)
 })
 
@@ -995,6 +993,33 @@ one.put('/applet-thumbnails', ownerWorkspace, async c => {
   return c.body(null, 204)
 })
 
+function themePreset<T extends string>(presets: Record<T, unknown>) {
+  return z.custom<T>(value => typeof value === 'string' && Object.hasOwn(presets, value))
+}
+
+const layoutPatchSchema = z
+  .strictObject({
+    theme: z
+      .strictObject({
+        font: themePreset(FONT_THEMES),
+        color: themePreset(COLOR_THEMES),
+        radius: themePreset(RADIUS_THEMES),
+        agent: themePreset(AGENT_THEMES)
+      })
+      .optional(),
+    widgetGrid: z
+      .array(
+        z.object({
+          i: z.string().min(1),
+          x: z.int().nonnegative(),
+          y: z.int().nonnegative()
+        })
+      )
+      .optional(),
+    origin: z.string().optional()
+  })
+  .refine(patch => patch.theme !== undefined || patch.widgetGrid !== undefined)
+
 one.put('/', personalWorkspace, async c => {
   const ws = c.get('ws')
   if (ws.remote) {
@@ -1003,20 +1028,16 @@ one.put('/', personalWorkspace, async c => {
       403
     )
   }
-  const body = await c.req.json()
-  if (!body || body.version !== 2) return c.text('Bad request', 400)
-  // `origin` is the writing tab's id, echoed so that tab skips its own event.
-  const { origin } = body
-  // Only widgets and theme are taken from the body, so a grid/theme save can't
-  // erase a `moi config`-set name or icon. See mergeLayoutForSave.
-  const existing = await loadLayout(ws.path)
-  const next = mergeLayoutForSave(existing, body)
-  await saveLayout(next, ws.path)
-  if (
-    JSON.stringify(resolveWorkspaceTheme(existing.theme)) !==
-    JSON.stringify(resolveWorkspaceTheme(next.theme))
-  ) {
-    publishEvent({ type: 'theme:updated', workspaceId: ws.id, origin: eventOrigin(origin) })
+  const patch = layoutPatchSchema.safeParse(await c.req.json().catch(() => null))
+  if (!patch.success) return c.text('Invalid layout patch', 400)
+  const { origin, ...layout } = patch.data
+  const { changed } = await updateLayout(ws.path, current => mergeLayoutForSave(current, layout))
+  if (changed) {
+    publishEvent({
+      type: 'workspace-config:changed',
+      workspaceId: ws.id,
+      origin
+    })
   }
   return c.body(null, 204)
 })
@@ -1077,9 +1098,9 @@ workspaces.put('/order', async c => {
     const hiddenIds = all.filter(entry => !visible.has(entry.id)).map(entry => entry.id)
     const entries = await reorderWorkspaces([...body.ids, ...hiddenIds])
     // List-only change: a narrow event so clients refetch just the sidebar
-    // list, not every per-workspace query (`workspace:updated` also triggers
+    // list, not every per-workspace query (`workspace-config:changed` also triggers
     // layout refetches in open workspaces).
-    publishEvent({ type: 'workspaces-list:updated', origin: eventOrigin(body.origin) })
+    publishEvent({ type: 'workspaces-list:changed', origin: eventOrigin(body.origin) })
     return c.json(await mergeWorkspaceList(visibleWorkspaces(entries)))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -1218,13 +1239,11 @@ workspaces.post('/create', async c => {
   await setWorkspaceConfig(path, { name })
   const entry = await registerWorkspace(path, { id: basename(path), harness, name })
   // Nudge every connected client (the sidebar list) to refetch.
-  publishEvent({ type: 'workspaces-list:updated' })
+  publishEvent({ type: 'workspaces-list:changed' })
   return c.json(entry, 201)
 })
 
 // `/:id` is registered after the static `/discover` so the literal path wins.
-// `/api/workspaces/ws` (the live-event WebSocket) is intercepted by Bun's routes
-// table before it ever reaches Hono, so it never collides with `:id`.
 workspaces.route('/:id', one)
 
 // ---- top-level API ----------------------------------------------------------
@@ -1306,7 +1325,7 @@ api.patch('/api/settings', async c => {
   }
   // Other open clients hold these in a query cache with no polling; broadcast
   // the new value so an app-wide preference applies everywhere immediately.
-  publishEvent({ type: 'settings:updated', settings })
+  publishEvent({ type: 'app-settings:changed', settings })
   return c.json(settings)
 })
 

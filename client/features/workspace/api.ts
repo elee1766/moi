@@ -7,13 +7,13 @@ import { jsonRequest, requestJson, requestVoid } from '@/client/api/http'
 import { WORKSPACE_RESOURCE_OPTIONS } from '@/client/api/query-options'
 import { workspaceKeys } from '@/client/api/workspace-keys'
 import { BROWSER_TAB_ID } from '@/client/lib/browser-tab-id'
-import { useWorkspaceEvent } from '@/client/runtime/use-workspace-events'
+import { useWorkspaceEvent } from '@/client/runtime/use-client-events'
 import type {
   WorkspaceEntry,
   WorkspaceHarness,
   WorkspaceLayoutResponse,
   WorkspaceInfoResponse,
-  WorkspaceLayout,
+  WorkspaceLayoutPatch,
   WorkspaceSkillsStatus,
   WorkspaceSkillsUpdateFailure,
   HarnessType
@@ -63,15 +63,9 @@ export function useWorkspaceLayout(workspaceId: string) {
 // Workspace models, capabilities, and readiness for credential overrides or gateways.
 export function useWorkspaceHarness(workspaceId: string) {
   const queryClient = useQueryClient()
-  useWorkspaceEvent(event => {
-    if (event.type === 'harness:updated' && event.workspaceId === workspaceId) {
-      void queryClient.cancelQueries({ queryKey: workspaceKeys.harness(workspaceId) })
-      queryClient.setQueryData<WorkspaceHarness>(workspaceKeys.harness(workspaceId), prev =>
-        prev ? { ...prev, availability: event.availability } : prev
-      )
-    }
+  useWorkspaceEvent(workspaceId, event => {
     // Env can swap credentials; the server dropped its cache — refetch.
-    if (event.type === 'env:updated' && event.workspaceId === workspaceId) {
+    if (event.type === 'env:changed') {
       queryClient.invalidateQueries({ queryKey: workspaceKeys.harness(workspaceId) })
     }
   })
@@ -144,7 +138,7 @@ export function useUpdateWorkspaceSkills(workspaceId: string) {
 
 export function useSaveLayout(workspaceId: string) {
   const queryClient = useQueryClient()
-  return useMutation<void, Error, WorkspaceLayout>({
+  return useMutation<void, Error, WorkspaceLayoutPatch>({
     mutationFn: layout =>
       requestVoid(
         getWorkspaceApiBase(workspaceId, queryClient),
@@ -164,6 +158,7 @@ export function useSaveLayout(workspaceId: string) {
         void queryClient.invalidateQueries({
           queryKey: workspaceInfoOptions(getWorkspaceApiBase(workspaceId, queryClient)).queryKey
         })
+      void queryClient.invalidateQueries({ queryKey: workspaceKeys.layout(workspaceId) })
       void queryClient.invalidateQueries({ queryKey: workspaceKeys.all, exact: true })
       queryClient.invalidateQueries({ queryKey: workspaceKeys.previews })
     }

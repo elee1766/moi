@@ -9,8 +9,11 @@ import {
   QueryClientProvider
 } from '@tanstack/react-query'
 import { AppProvider } from '@/client/app/app-provider'
-import { WorkspaceEventsClient } from '@/client/runtime/workspace-events'
-import type { WorkspaceEventHandler } from '@/client/runtime/workspace-events'
+import { AppEventsClient } from '@/client/runtime/app-events'
+import {
+  __setQueryClientForTests,
+  handleFrame
+} from '@/client/features/chat/connection/chat-connection'
 import { useWorkspaceHarness } from '@/client/features/workspace/api'
 import { workspaceKeys } from '@/client/api/workspace-keys'
 import { useHarnessStatus, useRetryHarnessStatus } from './api'
@@ -32,18 +35,10 @@ test('workspaces and onboarding share status; auth events and harness switches u
   for (const [key, value] of Object.entries(globals))
     Object.defineProperty(globalThis, key, { configurable: true, value })
   notifyManager.setNotifyFunction(callback => act(callback))
-  const handlers = new Set<WorkspaceEventHandler>()
-  const connect = spyOn(WorkspaceEventsClient.prototype, 'connect').mockImplementation(() => {})
-  const close = spyOn(WorkspaceEventsClient.prototype, 'close').mockImplementation(() => {})
-  const subscription = spyOn(WorkspaceEventsClient.prototype, 'subscribe').mockImplementation(
-    handler => {
-      handlers.add(handler)
-      return () => {
-        handlers.delete(handler)
-      }
-    }
-  )
+  const connect = spyOn(AppEventsClient.prototype, 'connect').mockImplementation(() => {})
+  const close = spyOn(AppEventsClient.prototype, 'close').mockImplementation(() => {})
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  __setQueryClientForTests(client)
   const requests: string[] = []
   let harness = 'claude-code'
   let signedOut = false
@@ -75,7 +70,7 @@ test('workspaces and onboarding share status; auth events and harness switches u
     await act(async () => root.unmount())
     client.clear()
     focusManager.setFocused(undefined)
-    subscription.mockRestore()
+    __setQueryClientForTests(null)
     connect.mockRestore()
     close.mockRestore()
     fetchSpy.mockRestore()
@@ -126,6 +121,9 @@ test('workspaces and onboarding share status; auth events and harness switches u
   expect(requests.filter(path => path.includes('/harnesses/'))).toHaveLength(1)
   expect(document.querySelector('[data-workspace]')?.textContent).toBe('claude-code:available')
 
+  const workspaceReads = requests.filter(
+    path => path.endsWith('/two/harness') || path.endsWith('/one/harness')
+  ).length
   const old = Promise.withResolvers<Response>()
   pending = old.promise
   await act(async () => {
@@ -133,12 +131,9 @@ test('workspaces and onboarding share status; auth events and harness switches u
     await Bun.sleep(10)
   })
   await act(async () => {
-    for (const handler of handlers)
-      handler({
-        type: 'harness-status:changed',
-        harness: 'claude-code',
-        status: { availability: { status: 'login-required', reason: 'Signed out' } }
-      })
+    pending = undefined
+    signedOut = true
+    handleFrame({ type: 'harness:changed' })
     old.resolve(
       Response.json({
         'claude-code': { availability: { status: 'available' } },
@@ -149,14 +144,13 @@ test('workspaces and onboarding share status; auth events and harness switches u
   })
   expect(document.querySelector('[data-onboarding]')?.textContent).toBe('login-required')
   expect(document.querySelector('[data-workspace]')?.textContent).toBe('claude-code:login-required')
-  pending = undefined
+  expect(
+    requests.filter(path => path.endsWith('/two/harness') || path.endsWith('/one/harness')).length
+  ).toBeGreaterThan(workspaceReads)
   await act(async () => {
-    for (const handler of handlers)
-      handler({
-        type: 'harness-status:changed',
-        harness: 'claude-code',
-        status: { availability: { status: 'available' } }
-      })
+    pending = undefined
+    signedOut = false
+    handleFrame({ type: 'harness:changed' })
     await Bun.sleep(20)
   })
   expect(document.querySelector('[data-onboarding]')?.textContent).toBe('available')
@@ -188,7 +182,7 @@ test('workspaces and onboarding share status; auth events and harness switches u
   expect(document.querySelector('[data-workspace]')?.textContent).toBe('codex:login-required')
   expect(document.querySelector('[data-onboarding]')?.textContent).toBe('available')
   await act(async () => {
-    for (const handler of handlers) handler({ type: 'connection:opened' })
+    void client.invalidateQueries({ queryKey: ['harness-status'] })
     await Bun.sleep(20)
   })
   expect(
@@ -216,12 +210,9 @@ test('workspaces and onboarding share status; auth events and harness switches u
     await Bun.sleep(10)
   })
   await act(async () => {
-    for (const handler of handlers)
-      handler({
-        type: 'harness-status:changed',
-        harness: 'claude-code',
-        status: { availability: { status: 'available' } }
-      })
+    pending = undefined
+    signedOut = false
+    handleFrame({ type: 'harness:changed' })
     retryResponse.resolve(
       Response.json({
         'claude-code': { availability: { status: 'login-required' } },

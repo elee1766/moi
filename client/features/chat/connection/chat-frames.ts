@@ -1,16 +1,15 @@
+import type { ClientEvent } from '@/lib/events'
+import { receiveWorkspaceHarness } from '@/client/features/workspace/harness-transition'
 import type { QueryClient } from '@tanstack/react-query'
 
 import { workspaceKeys } from '@/client/api/workspace-keys'
-import { getScratchExecutor } from '@/client/features/scratchpad/scratch-executor'
 import { liveStore } from '@/client/features/chat/chat-store'
 import { bufferSessionEvent } from '@/client/features/chat/sessions/session-view'
 import { renameSelectedSessionInCache } from '@/client/features/chat/sessions/use-selected-session'
 import { applyArchivedSession } from '@/client/features/chat/sessions/api'
 import { applyEvent } from '@/lib/format'
 import type {
-  ClientMessage,
   PreviewFrame,
-  ScratchOp,
   SessionActivity,
   SessionSummary,
   StreamEvent,
@@ -19,15 +18,24 @@ import type {
 
 type ChatFrameContext = {
   queryClient: QueryClient | null
-  sendMessage: (message: ClientMessage) => void
-  onWorkspaceSwitch: ((workspaceId: string) => void) | null
 }
 
 export function reduceChatFrame(data: Record<string, unknown>, context: ChatFrameContext) {
-  const { queryClient, sendMessage, onWorkspaceSwitch } = context
+  const { queryClient } = context
   const store = liveStore.getState()
 
-  if (data.type === 'status_snapshot') {
+  if (data.type === 'harness:changed') {
+    void queryClient?.invalidateQueries({ queryKey: ['harness-status'] })
+    void queryClient?.invalidateQueries({ queryKey: ['workspaces', 'harness'] })
+    return
+  }
+  if (data.type === 'workspace-harness:switched') {
+    const event = data as Extract<ClientEvent, { type: 'workspace-harness:switched' }>
+    if (queryClient) void receiveWorkspaceHarness(queryClient, event.workspaceId, event.harness)
+    return
+  }
+
+  if (data.type === 'sessions:status-snapshot') {
     store.reconcileActivity(
       (data.sessions as
         | { workspaceId: string; sessionId: string; activity: SessionActivity }[]
@@ -35,7 +43,7 @@ export function reduceChatFrame(data: Record<string, unknown>, context: ChatFram
     )
     return
   }
-  if (data.type === 'status') {
+  if (data.type === 'session:status') {
     const workspaceId = data.workspaceId as string
     const sessionId = data.sessionId as string
     const activity = data.activity as SessionActivity
@@ -43,7 +51,7 @@ export function reduceChatFrame(data: Record<string, unknown>, context: ChatFram
     if (activity !== 'running') store.clearPreviewsForSession(workspaceId, sessionId)
     return
   }
-  if (data.type === 'preview') {
+  if (data.type === 'session:preview') {
     const frame = data as unknown as PreviewFrame
     const key = workspaceKeys.events(frame.workspaceId, frame.sessionId)
     if (queryClient?.getQueryData(key) === undefined) return
@@ -56,7 +64,7 @@ export function reduceChatFrame(data: Record<string, unknown>, context: ChatFram
     })
     return
   }
-  if (data.type === 'session_renamed') {
+  if (data.type === 'session:renamed') {
     const workspaceId = data.workspaceId as string
     const from = data.from as string
     const to = data.to as string
@@ -94,35 +102,15 @@ export function reduceChatFrame(data: Record<string, unknown>, context: ChatFram
     queryClient?.invalidateQueries({ queryKey: workspaceKeys.previews })
     return
   }
-  if (data.type === 'sessions_changed' || data.type === 'session_archived') {
+  if (data.type === 'sessions:changed' || data.type === 'session:archived') {
     const workspaceId = data.workspaceId as string
-    if (queryClient && data.type === 'session_archived' && typeof data.sessionId === 'string')
+    if (queryClient && data.type === 'session:archived' && typeof data.sessionId === 'string')
       applyArchivedSession(queryClient, workspaceId, data.sessionId)
     const sessionsKey = workspaceKeys.sessions(workspaceId)
     queryClient?.invalidateQueries({ queryKey: sessionsKey })
     queryClient?.invalidateQueries({ queryKey: workspaceKeys.previews })
     return
   }
-  if (data.type === 'workspace:switch') {
-    onWorkspaceSwitch?.(data.workspaceId as string)
-    return
-  }
-  if (data.type === 'scratchpad:op') {
-    const run = getScratchExecutor(data.workspaceId as string)
-    if (!run) return
-    const opId = data.opId as string
-    run(data.op as ScratchOp).then(
-      result => sendMessage({ type: 'scratchpad:op-result', opId, result }),
-      error =>
-        sendMessage({
-          type: 'scratchpad:op-result',
-          opId,
-          error: error instanceof Error ? error.message : String(error)
-        })
-    )
-    return
-  }
-
   const workspaceId = data.workspaceId as string | undefined
   const sessionId = data.sessionId as string | undefined
   if (!workspaceId || !sessionId) return

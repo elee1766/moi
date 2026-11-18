@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import type { WorkspaceEntry } from '@/lib/types'
 
 import { api } from './index'
-import { setEventServer } from '../events'
+import { setEventServer, workspaceEventsTopic } from '../events'
 import { loadLayout } from '../workspaces/layout'
 import { DEFAULT_REGISTRY_PATH, registerWorkspace, setRegistryPath } from '../workspaces/registry'
 
@@ -30,8 +30,8 @@ beforeEach(async () => {
   workspaceId = (await registerWorkspace(workspaceDir, { harness: 'codex' })).id
   published = []
   setEventServer({
-    publish: (_topic, data) => {
-      published.push(data)
+    publish: (topic, data) => {
+      if (topic === workspaceEventsTopic(workspaceId)) published.push(data)
     }
   })
 })
@@ -70,8 +70,8 @@ test('glyphs and uploads keep their complete presentation in one icon object', a
 
   expect((await putIcon()).status).toBe(200)
   expect(published.map(event => JSON.parse(event))).toEqual([
-    { type: 'workspace:updated', workspaceId },
-    { type: 'workspace:updated', workspaceId }
+    { type: 'workspace-config:changed' },
+    { type: 'workspace-config:changed' }
   ])
   const plain = await loadLayout(workspaceDir)
   expect(plain.icon?.type).toBe('upload')
@@ -118,19 +118,52 @@ test('workspace config rejects unknown glyph ids', async () => {
 })
 
 test('theme saves broadcast changes and expose the theme in workspace lists', async () => {
-  const layout = await loadLayout(workspaceDir)
   const theme = { font: 'sans', color: 'rose', radius: 'soft', agent: 'boxy' } as const
 
   const response = await api.request(`/api/workspaces/${workspaceId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...layout, theme })
+    body: JSON.stringify({ theme })
   })
   const list = (await (await api.request('/api/workspaces')).json()) as WorkspaceEntry[]
 
   expect(response.status).toBe(204)
-  expect(published).toContain(JSON.stringify({ type: 'theme:updated', workspaceId }))
+  expect(published).toContain(JSON.stringify({ type: 'workspace-config:changed' }))
   expect(list[0]?.theme).toEqual(theme)
+})
+
+test.each([
+  { origin: 'tab' },
+  { theme: { font: 'sans' } },
+  { theme: { font: 'sans', color: 'unknown', radius: 'soft', agent: 'boxy' }, widgetGrid: [] },
+  { widgetGrid: [{ i: 'counter', x: '1', y: 0 }] },
+  { widgetGrid: [], origin: 42 },
+  { widgetGrid: [], name: 'rename' }
+])('rejects an invalid layout patch without applying any fields: %j', async patch => {
+  const initial = await loadLayout(workspaceDir)
+  const response = await api.request(`/api/workspaces/${workspaceId}`, {
+    method: 'PUT',
+    body: JSON.stringify(patch)
+  })
+  expect(response.status).toBe(400)
+  expect(await loadLayout(workspaceDir)).toEqual(initial)
+  expect(published).toEqual([])
+})
+
+test('concurrent theme and widget edits preserve both changes', async () => {
+  const theme = { font: 'sans', color: 'rose', radius: 'soft', agent: 'boxy' }
+  const widgetGrid = [{ i: '_moi_views', x: 2, y: 3 }]
+  const results = await Promise.all(
+    [{ theme }, { widgetGrid }].map(patch =>
+      api.request(`/api/workspaces/${workspaceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch)
+      })
+    )
+  )
+  expect(results.map(result => result.status)).toEqual([204, 204])
+  expect(await loadLayout(workspaceDir)).toMatchObject({ theme, widgetGrid })
 })
 
 test('layout saves leave personal chat defaults unchanged', async () => {
@@ -144,7 +177,7 @@ test('layout saves leave personal chat defaults unchanged', async () => {
   const response = await api.request(`/api/workspaces/${workspaceId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...initial, widgetGrid: [] })
+    body: JSON.stringify({ widgetGrid: [] })
   })
   expect(response.status).toBe(204)
   expect(await loadLayout(workspaceDir)).toEqual({ ...initial, widgetGrid: [] })
@@ -152,3 +185,34 @@ test('layout saves leave personal chat defaults unchanged', async () => {
     (await (await api.request(`/api/workspaces/${workspaceId}/state`)).json()).chatDefaults
   ).toEqual({ model: 'chosen-model' })
 })
+
+test.each([
+  { widgetGrid: [{ i: '_moi_views', x: 2, y: 3 }] },
+  { widgetGrid: [] },
+  {
+    widgetGrid: [
+      { i: '_moi_views', x: 0, y: 0 },
+      { i: 'counter', x: 1, y: 1 }
+    ]
+  }
+])(
+  'widget placement changes notify other viewers without a theme change: %j',
+  async ({ widgetGrid }) => {
+    const initial = await loadLayout(workspaceDir)
+    const body = { widgetGrid, origin: 'editing-tab' }
+    const save = () =>
+      api.request(`/api/workspaces/${workspaceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+    expect((await save()).status).toBe(204)
+    expect(await loadLayout(workspaceDir)).toEqual({ ...initial, widgetGrid: [...widgetGrid] })
+    expect(published.map(event => JSON.parse(event))).toEqual([
+      { type: 'workspace-config:changed', origin: 'editing-tab' }
+    ])
+    published.length = 0
+    expect((await save()).status).toBe(204)
+    expect(published).toEqual([])
+  }
+)

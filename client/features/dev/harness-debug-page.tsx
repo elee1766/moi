@@ -276,13 +276,13 @@ export function HarnessDebugPage() {
   // Live client frames: our own chat socket, same protocol as the real UI.
   useEffect(() => {
     if (!workspaceId) return
-    const sock = new WebSocket(wsUrl('/ws'))
+    const sock = new WebSocket(wsUrl('/api/harness/events'))
     wsRef.current = sock
     sock.onmessage = e => {
       try {
         const frame = JSON.parse(String(e.data)) as Record<string, unknown>
         if (frame.workspaceId && frame.workspaceId !== workspaceId) return
-        if (frame.type === 'session_renamed' && frame.from === sessionRef.current) {
+        if (frame.type === 'session:renamed' && frame.from === sessionRef.current) {
           setSessionId(frame.to as string)
           setIsNew(false)
         }

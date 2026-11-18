@@ -101,7 +101,7 @@ test('renames a view through its source-backed config', async () => {
   expect(response.status).toBe(200)
   expect(view).toMatchObject({ id: 'cards', status: 'compiled', title: 'Study cards' })
   expect(await Bun.file(sourcePath).text()).toContain('title: "Study cards"')
-  expect(published).toContainEqual(expect.objectContaining({ type: 'view-layout:updated' }))
+  expect(published).toContainEqual(expect.objectContaining({ type: 'views-list:changed' }))
 })
 
 test('restores the source when the renamed view does not build', async () => {
@@ -139,7 +139,7 @@ test('renaming rebuilds only the selected view and preserves pending views', asy
   ).toBe(false)
   expect(await listPendingViews(ws)).toEqual(pendingViewsBefore)
   expect(published).not.toContainEqual(
-    expect.objectContaining({ type: 'view:updated', name: 'draft' })
+    expect.objectContaining({ type: 'view:changed', name: 'draft' })
   )
 })
 
@@ -233,7 +233,7 @@ test('deletes a view and its owned state while preserving shared files and data'
   expect(getClientFrameLog(workspaceId).map(entry => entry.frame)).toEqual(
     expect.arrayContaining(
       archived.map(sessionId => ({
-        type: 'session_archived',
+        type: 'session:archived',
         workspaceId,
         sessionId
       }))
@@ -253,7 +253,7 @@ test('deletes a view and its owned state while preserving shared files and data'
     body: stringify([])
   })
   expect(rpcAfterDelete.status).toBe(500)
-  expect(published).toContainEqual({ type: 'view:deleted', workspaceId, name: 'cards' })
+  expect(published).toContainEqual({ type: 'view:deleted', name: 'cards' })
 })
 
 test('deleting a view keeps a shared server module callable and the remaining view buildable', async () => {
@@ -297,7 +297,7 @@ test('deleting a view does not build or complete an unfinished sibling', async (
     })
   ])
   expect(published).not.toContainEqual(
-    expect.objectContaining({ type: 'view:updated', name: draft.id })
+    expect.objectContaining({ type: 'view:changed', name: draft.id })
   )
 })
 
@@ -331,7 +331,7 @@ test('archive failure leaves compiled view files, chats and tabs available to re
   expect(await Bun.file(sourcePath).exists()).toBe(true)
   expect(await Bun.file(serverPath).exists()).toBe(true)
   expect((await readWorkspaceState(ws)).selected['views/cards']).toBe('child')
-  expect(published).not.toContainEqual({ type: 'view:deleted', workspaceId, name: 'cards' })
+  expect(published).not.toContainEqual({ type: 'view:deleted', name: 'cards' })
 })
 
 test('a bundled pending view moves from the state to the compiled list', async () => {
@@ -352,10 +352,10 @@ test('a bundled pending view moves from the state to the compiled list', async (
   published = []
   await handleBundleViews(event => published.push(event), workspaceId, workspaceDir, false, view.id)
   const layoutIndex = published.findIndex(
-    event => (event as { type: string }).type === 'view-layout:updated'
+    event => (event as { type: string }).type === 'views-list:changed'
   )
   const completedIndex = published.findIndex(
-    event => (event as { type: string }).type === 'state:changed'
+    event => (event as { type: string }).type === 'personal-state:changed'
   )
   expect(layoutIndex).toBeGreaterThanOrEqual(0)
   expect(completedIndex).toBeGreaterThan(layoutIndex)

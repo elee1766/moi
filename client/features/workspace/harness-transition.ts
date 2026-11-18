@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { matchQuery, useQueryClient, type QueryClient, type Query } from '@tanstack/react-query'
-import { useWorkspaceEvent } from '@/client/runtime/use-workspace-events'
+import { useClientEvent } from '@/client/runtime/use-client-events'
 import type { WorkspaceLayoutResponse, HarnessType } from '@/lib/types'
 import { workspaceKeys } from '@/client/api/workspace-keys'
 import { liveStore } from '@/client/features/chat/chat-store'
@@ -73,11 +73,9 @@ export function useWorkspaceHarnessChanges(id: string, harness: HarnessType | nu
   useEffect(() => {
     if (harness) void receiveWorkspaceHarness(queryClient, id, harness)
   }, [harness, id, queryClient])
-  useWorkspaceEvent(event => {
-    if (event.type === 'connection:opened') {
+  useClientEvent(event => {
+    if (event.type === 'app:connected') {
       void queryClient.invalidateQueries({ queryKey: workspaceKeys.layout(id) })
-    } else if (event.type === 'workspace-harness:switched' && event.workspaceId === id) {
-      void receiveWorkspaceHarness(queryClient, id, event.harness)
     }
   })
 }

@@ -8,7 +8,7 @@ import { createdWorkspacesRoot } from '../app-config'
 import { createWorkspaceDirectory, provisionWorkspace } from '../workspaces/init'
 import { getWorkspace, registerWorkspace } from '../workspaces/registry'
 import { setWorkspaceConfig } from '../workspaces/config'
-import { saveLayout } from '../workspaces/layout'
+import { updateLayout } from '../workspaces/layout'
 import { resolveWorkspaceTheme } from '@/lib/themes'
 import { publishEvent } from '../events'
 import { harnessFor } from '../harness/registry'
@@ -197,14 +197,14 @@ export function createOnboardingJobs(overrides: Partial<typeof defaults> = {}) {
     const path = job.workspacePath
     await deps.provisionWorkspace(path, progress.harness)
     if (!job.workspaceId) {
-      const layout = await deps.setWorkspaceConfig(path, {
+      await deps.setWorkspaceConfig(path, {
         name: idea.name,
         icon: { type: 'glyph', value: idea.icon, background: 'theme' }
       })
-      await saveLayout(
-        { ...layout, theme: resolveWorkspaceTheme({ ...layout.theme, ...idea.theme }) },
-        path
-      )
+      await updateLayout(path, layout => ({
+        ...layout,
+        theme: resolveWorkspaceTheme({ ...layout.theme, ...idea.theme })
+      }))
     }
     const ws = await deps.registerWorkspace(path, {
       id: job.workspaceId ?? basename(path),
@@ -217,7 +217,7 @@ export function createOnboardingJobs(overrides: Partial<typeof defaults> = {}) {
     // Reconciliation must compare against the exact message originally submitted.
     const brief = job.stage ? await Bun.file(briefPath).text() : composeBuildBrief(idea)
     await Bun.write(briefPath, brief)
-    deps.publishEvent({ type: 'workspaces-list:updated' })
+    deps.publishEvent({ type: 'workspaces-list:changed' })
     const harness = deps.harnessFor(ws)
     if (job.stage === 'sending' || job.stage === 'accepted') {
       // The provider may have accepted before a response/save was lost. This

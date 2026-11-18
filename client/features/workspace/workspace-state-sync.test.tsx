@@ -9,20 +9,16 @@ import {
   usePinnedSession,
   useSelectedSession
 } from '@/client/features/chat/sessions/use-selected-session'
-import * as workspaceEvents from '@/client/runtime/use-workspace-events'
-import type { WorkspaceEvent } from '@/client/runtime/use-workspace-events'
+import { AppContext } from '@/client/runtime/app-context'
+import { AppEventsClient } from '@/client/runtime/app-events'
+import type { ClientEvent } from '@/client/runtime/use-client-events'
 import type { CompiledView, WorkspaceState } from '@/lib/types'
 import { useViewActions } from '@/client/features/views/use-view-actions'
 import { useViews } from '@/client/features/views/api'
 import { Workspace } from './workspace-context'
 import { WorkspaceLayoutContext } from './workspace-layout-context'
 import { createDefaultWorkspaceLayout } from '@/lib/workspace-layout'
-import {
-  receiveWorkspaceState,
-  useWorkspaceState,
-  useWorkspaceStateSync,
-  useWorkspaceStateWrite
-} from './workspace-state'
+import { useWorkspaceState, useWorkspaceStateSync, useWorkspaceStateWrite } from './workspace-state'
 
 const WORKSPACE_ID = 'abc'
 
@@ -66,11 +62,7 @@ function mount(initial: WorkspaceState, respond: (request: Request) => Promise<u
       { preconnect: fetch.preconnect }
     )
   )
-  let handleEvent: (event: WorkspaceEvent) => void = () => {}
-  const eventsSpy = spyOn(workspaceEvents, 'useWorkspaceEvent').mockImplementation(handler => {
-    handleEvent = handler
-  })
-
+  const events = new AppEventsClient('ws://localhost/api/events')
   const root = createRoot(document.getElementById('root')!)
   cleanup = async () => {
     await act(async () => {
@@ -80,7 +72,6 @@ function mount(initial: WorkspaceState, respond: (request: Request) => Promise<u
     })
     notifyManager.setNotifyFunction(callback => callback())
     fetchSpy.mockRestore()
-    eventsSpy.mockRestore()
     for (const [key, descriptor] of descriptors) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor)
       else Reflect.deleteProperty(globalThis, key)
@@ -90,7 +81,9 @@ function mount(initial: WorkspaceState, respond: (request: Request) => Promise<u
     act(async () => {
       root.render(
         <Workspace id={WORKSPACE_ID}>
-          <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+          <AppContext value={{ events }}>
+            <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+          </AppContext>
         </Workspace>
       )
     })
@@ -99,7 +92,10 @@ function mount(initial: WorkspaceState, respond: (request: Request) => Promise<u
     requests,
     render,
     cached: () => queryClient.getQueryData<WorkspaceState>(workspaceKeys.state(WORKSPACE_ID)),
-    emit: (event: WorkspaceEvent) => act(() => handleEvent(event)),
+    emit: (event: ClientEvent) =>
+      act(() => {
+        events.emit(event)
+      }),
     settle: () =>
       act(async () => {
         await Bun.sleep(10)
@@ -113,65 +109,78 @@ function deferred<T>() {
   return { promise, resolve }
 }
 
-test('a finished view stays visible through pending cleanup and a stale list reply', async () => {
-  const reply = deferred<{ views: CompiledView[] }>()
-  const fixture = mount(
-    workspaceState({
-      pendingViews: { board: { status: 'submitted', requirements: 'Build a board' } }
-    }),
-    () => reply.promise
-  )
-  const queryKey = workspaceKeys.views(WORKSPACE_ID)
-  fixture.queryClient.setQueryData(queryKey, [])
-  const rendered: string[][] = []
-  function Probe() {
-    const { data } = useViews(WORKSPACE_ID)
-    useLayoutEffect(() => {
-      rendered.push(data?.map(view => `${view.id}:${view.status}`) ?? [])
-    }, [data])
-    return null
+test.each(['owner first', 'personal first'])(
+  'a finished view stays visible with %s and a stale list reply',
+  async order => {
+    const reply = deferred<{ views: CompiledView[] }>()
+    const fixture = mount(
+      workspaceState({
+        pendingViews: { board: { status: 'submitted', requirements: 'Build a board' } }
+      }),
+      () => reply.promise
+    )
+    const queryKey = workspaceKeys.views(WORKSPACE_ID)
+    fixture.queryClient.setQueryData(queryKey, [])
+    const rendered: string[][] = []
+    function Probe() {
+      useWorkspaceStateSync()
+      const { data } = useViews(WORKSPACE_ID)
+      useLayoutEffect(() => {
+        rendered.push(data?.map(view => `${view.id}:${view.status}`) ?? [])
+      }, [data])
+      return null
+    }
+    await fixture.render(
+      <WorkspaceLayoutContext.Provider
+        value={{
+          layout: createDefaultWorkspaceLayout(),
+          setLayout: () => {},
+          name: null,
+          cwd: null,
+          harness: 'claude-code',
+          workspaceId: WORKSPACE_ID,
+          apiBase: `/api/workspaces/${WORKSPACE_ID}`,
+          isRemote: false,
+          isLoading: false
+        }}
+      >
+        <Probe />
+      </WorkspaceLayoutContext.Provider>
+    )
+    expect(rendered.at(-1)).toEqual(['board:submitted'])
+
+    const request = fixture.queryClient.refetchQueries({ queryKey })
+    await fixture.settle()
+    fixture.emit({ type: 'views-list:changed', workspaceId: 'other', views: [] })
+    await fixture.settle()
+    expect(rendered.at(-1)).toEqual(['board:submitted'])
+
+    const compiled: CompiledView = { id: 'board', status: 'compiled', title: 'Board' }
+    const owner: ClientEvent = {
+      type: 'views-list:changed',
+      workspaceId: WORKSPACE_ID,
+      views: [compiled]
+    }
+    const personal: ClientEvent = {
+      type: 'personal-state:changed',
+      workspaceId: WORKSPACE_ID,
+      state: workspaceState({ revision: 2 }),
+      completedViews: [compiled]
+    }
+    for (const event of order === 'owner first' ? [owner, personal] : [personal, owner]) {
+      fixture.emit(event)
+      await fixture.settle()
+      expect(rendered.at(-1)).toEqual(['board:compiled'])
+    }
+    reply.resolve({ views: [] })
+    await request
+    await fixture.settle()
+
+    expect(fixture.queryClient.getQueryData<CompiledView[]>(queryKey)).toEqual([compiled])
+    expect(rendered.every(views => views.length === 1)).toBe(true)
+    expect(rendered.at(-1)).toEqual(['board:compiled'])
   }
-  await fixture.render(
-    <WorkspaceLayoutContext.Provider
-      value={{
-        layout: createDefaultWorkspaceLayout(),
-        setLayout: () => {},
-        name: null,
-        cwd: null,
-        harness: 'claude-code',
-        workspaceId: WORKSPACE_ID,
-        apiBase: `/api/workspaces/${WORKSPACE_ID}`,
-        isRemote: false,
-        isLoading: false
-      }}
-    >
-      <Probe />
-    </WorkspaceLayoutContext.Provider>
-  )
-  expect(rendered.at(-1)).toEqual(['board:submitted'])
-
-  const request = fixture.queryClient.refetchQueries({ queryKey })
-  await fixture.settle()
-  fixture.emit({ type: 'view-layout:updated', workspaceId: 'other', views: [] })
-  await fixture.settle()
-  expect(rendered.at(-1)).toEqual(['board:submitted'])
-
-  const compiled: CompiledView = { id: 'board', status: 'compiled', title: 'Board' }
-  fixture.emit({ type: 'view-layout:updated', workspaceId: WORKSPACE_ID, views: [compiled] })
-  await fixture.settle()
-  expect(rendered.at(-1)).toEqual(['board:compiled'])
-  act(() =>
-    receiveWorkspaceState(fixture.queryClient, WORKSPACE_ID, workspaceState({ revision: 2 }))
-  )
-  await fixture.settle()
-  reply.resolve({ views: [] })
-  await request
-  await fixture.settle()
-
-  expect(fixture.queryClient.getQueryData<CompiledView[]>(queryKey)).toEqual([compiled])
-  expect(rendered.every(views => views.length === 1)).toBe(true)
-  expect(rendered.at(-1)).toEqual(['board:compiled'])
-})
+)
 
 describe('workspace state writes', () => {
   test('a reply waits while a later write is in flight; the last reply becomes the cache', async () => {
@@ -220,7 +229,7 @@ describe('workspace state writes', () => {
     )
   })
 
-  test('state:changed waits for writes in flight and never brings back an older copy', async () => {
+  test('personal-state:changed waits for writes in flight and never brings back an older copy', async () => {
     const reply = deferred<WorkspaceState>()
     const fixture = mount(workspaceState(), () => reply.promise)
     const handles: { pin?: (sessionId: string) => void } = {}
@@ -236,7 +245,7 @@ describe('workspace state writes', () => {
 
     await act(async () => handles.pin!('mine'))
     fixture.emit({
-      type: 'state:changed',
+      type: 'personal-state:changed',
       workspaceId: WORKSPACE_ID,
       state: workspaceState({ revision: 4, pinnedSessionId: 'theirs' })
     })
@@ -247,27 +256,27 @@ describe('workspace state writes', () => {
     expect(fixture.cached()?.revision).toBe(5)
 
     fixture.emit({
-      type: 'state:changed',
+      type: 'personal-state:changed',
       workspaceId: WORKSPACE_ID,
       state: workspaceState({ revision: 4, pinnedSessionId: 'theirs' })
     })
     expect(fixture.cached()?.pinnedSessionId).toBe('mine')
     fixture.emit({
-      type: 'state:changed',
+      type: 'personal-state:changed',
       workspaceId: WORKSPACE_ID,
       state: workspaceState({ revision: 6 })
     })
     expect(fixture.cached()).toEqual(workspaceState({ revision: 6 }))
   })
 
-  test('state:changed for a workspace this tab never loaded stays out of the cache', async () => {
+  test('personal-state:changed for a workspace this tab never loaded stays out of the cache', async () => {
     const fixture = mount(workspaceState(), async () => workspaceState())
     function Probe() {
       useWorkspaceStateSync()
       return null
     }
     await fixture.render(<Probe />)
-    fixture.emit({ type: 'state:changed', workspaceId: 'other', state: workspaceState() })
+    fixture.emit({ type: 'personal-state:changed', workspaceId: 'other', state: workspaceState() })
     expect(fixture.queryClient.getQueryData(workspaceKeys.state('other'))).toBeUndefined()
   })
 })
@@ -398,7 +407,7 @@ test('a view submission keeps its chat through delayed snapshots and a native se
   })
   const selected = fixture.cached()?.selected['views/board']
   expect(selected).toBeString()
-  fixture.emit({ type: 'state:changed', workspaceId: WORKSPACE_ID, state: initial })
+  fixture.emit({ type: 'personal-state:changed', workspaceId: WORKSPACE_ID, state: initial })
   await fixture.queryClient.refetchQueries({ queryKey: workspaceKeys.state(WORKSPACE_ID) })
   expect(fixture.cached()?.selected['views/board']).toBe(selected)
 
@@ -410,14 +419,14 @@ test('a view submission keeps its chat through delayed snapshots and a native se
       board: { status: 'submitted', requirements: 'Build cards', buildSessionId: 'native' }
     }
   })
-  fixture.emit({ type: 'state:changed', workspaceId: WORKSPACE_ID, state: server })
+  fixture.emit({ type: 'personal-state:changed', workspaceId: WORKSPACE_ID, state: server })
   await act(async () => {
     reply.resolve({ viewId: 'board', sessionId: 'native', state: server })
     await submission
   })
   expect(fixture.cached()).toEqual(server)
   expect(fixture.requests.filter(request => request.url.endsWith('/state'))).toHaveLength(1)
-  fixture.emit({ type: 'state:changed', workspaceId: WORKSPACE_ID, state: initial })
+  fixture.emit({ type: 'personal-state:changed', workspaceId: WORKSPACE_ID, state: initial })
   expect(fixture.cached()?.selected['views/board']).toBe('native')
 })
 
@@ -440,7 +449,7 @@ test('a newer socket snapshot survives an older write reply', async () => {
     pinnedSessionId: 'mine',
     selected: { 'views/board': 'native' }
   })
-  fixture.emit({ type: 'state:changed', workspaceId: WORKSPACE_ID, state: latest })
+  fixture.emit({ type: 'personal-state:changed', workspaceId: WORKSPACE_ID, state: latest })
   expect(fixture.cached()?.pinnedSessionId).toBe('mine')
   reply.resolve(workspaceState({ revision: 2, pinnedSessionId: 'mine' }))
   await fixture.settle()

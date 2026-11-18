@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify, parse } from 'devalue'
 import { api } from './index'
+import * as events from '../events'
 import {
   DEFAULT_REGISTRY_PATH,
   getWorkspace,
@@ -123,7 +124,8 @@ test('visitor API returns the reference, folder and resolved routing', async () 
 test('local workspace info includes routing without persisting response metadata', async () => {
   const info = await (await api.request(base)).json()
   expect(info).toMatchObject({ apiBase: base, isRemote: false, name: 'Owner board' })
-  expect((await api.request(base, put(info))).status).toBe(204)
+  expect((await api.request(base, put(info))).status).toBe(400)
+  expect((await api.request(base, put({ widgetGrid: [] }))).status).toBe(204)
   const saved = await Bun.file(join(owner, '.moi/.workspace.json')).json()
   expect(saved).not.toHaveProperty('apiBase')
   expect(saved).not.toHaveProperty('isRemote')
@@ -132,12 +134,7 @@ test('local workspace info includes routing without persisting response metadata
 test('visitor layout writes cannot add preferences or overwrite the reference', async () => {
   const before = await Bun.file(join(visitor, '.moi/.workspace.json')).text()
   const ownerBefore = await loadLayout(owner)
-  const response = await api.request(
-    local,
-    put({
-      version: 2
-    })
-  )
+  const response = await api.request(local, put({ widgetGrid: [] }))
   expect(response.status).toBe(403)
   expect(await Bun.file(join(visitor, '.moi/.workspace.json')).text()).toBe(before)
   expect(await loadLayout(owner)).toEqual(ownerBefore)
@@ -250,13 +247,22 @@ test('a view being built stays with the visitor until the owner lists it as comp
   expect((await api.request(`${local}/views/compiled`, patch({ title: 'Mine' }))).status).toBe(404)
   expect((await api.request(`${local}/views/compiled`, { method: 'DELETE' })).status).toBe(404)
   const reference = (await getWorkspace(visitorId))!
+  const published = spyOn(events, 'publishEvent')
+  spies.push(published)
   const ownerLists =
     (...ids: string[]) =>
     async () =>
-      Response.json({ views: ids.map(id => ({ id })) })
+      Response.json({ views: ids.map(id => ({ id, status: 'compiled', title: id })) })
   await completeRemoteViewBuilds(reference, ownerLists('compiled'))
   expect(await pendingIds()).toEqual([id])
   await completeRemoteViewBuilds(reference, ownerLists('compiled', id))
+  expect(published).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: 'personal-state:changed',
+      workspaceId: visitorId,
+      completedViews: [{ id, status: 'compiled', title: id }]
+    })
+  )
   expect(await pendingIds()).toEqual([])
 })
 

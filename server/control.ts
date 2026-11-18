@@ -15,14 +15,13 @@ import { CONTROL_HOST, CONTROL_PORT, PORT } from './constants'
 import { applyEnvChanged } from './workspaces/env-apply'
 import { callFunctionEphemeral, parseFunctionPath } from './applets/functions'
 import { processIcon } from './workspaces/icon'
-import { loadLayout, saveLayout } from './workspaces/layout'
+import { loadLayout, updateLayout } from './workspaces/layout'
 import { publishEvent } from './events'
 import { findWorkspaceForPath, listWorkspaces, registerWorkspace } from './workspaces/registry'
 import { requiredEnvFor } from './workspaces/required-env'
 import { executeScratchOp } from './scratchpad/executor'
 import { readScratchpadImage, readScratchpadShapes } from './scratchpad/document'
 import { relayScratchOp } from './scratchpad/relay'
-import { broadcastAll } from './state'
 import { assembleTabRows, assertNavigableTab } from './workspaces/tabs'
 import { applyThemeUpdate } from './workspaces/theme'
 import { handleBundle } from './applets/widgets'
@@ -101,7 +100,7 @@ export const control = Bun.serve({
         if (data.type === 'workspace:register') {
           const absPath = resolve(String(data.path))
           const entry = await registerWorkspace(absPath)
-          broadcastAll({ type: 'workspace:switch', workspaceId: entry.id })
+          publishEvent({ type: 'workspace:open-requested', workspaceId: entry.id })
           ws.send(JSON.stringify({ id: entry.id, path: entry.path }))
           return
         }
@@ -375,34 +374,24 @@ export const control = Bun.serve({
           return
         }
 
-        // Tell every connected applet to re-import its module (cache-bust) and
-        // re-run its data fetches. No rebuild, no page reload — `useApplet`
-        // handles `applets:refresh` like `*:updated` (invalidate + reload).
-        // `only` narrows to one kind or applet; default is both kinds.
-        // `widget:refresh` is the pre-filter message name older CLIs send.
-        if (data.type === 'applets:refresh' || data.type === 'widget:refresh') {
-          const match = data.path ? await resolveWorkspace(ws, data.path) : undefined
-          if (data.path && !match) return
-          const scope = match ? { workspaceId: match.id } : {}
+        if (data.type === 'applets:refresh') {
+          if (typeof data.path !== 'string' || !data.path) {
+            ws.send(JSON.stringify({ error: 'Refresh requires a workspace path' }))
+            return
+          }
+          const workspace = await resolveWorkspace(ws, data.path)
+          if (!workspace) return
           const only = typeof data.only === 'string' ? parseAppletSelector(data.only) : undefined
-          if (data.only && !only) {
+          if (data.only !== undefined && !only) {
             ws.send(JSON.stringify({ error: `Invalid applet selector "${data.only}"` }))
             return
           }
-          // No `workspaceId`: `moi refresh` names no workspace, so every open one reloads.
-          if (only?.id) {
-            publishEvent({
-              type: only.segment === 'widgets' ? 'widget:updated' : 'view:updated',
-              ...scope,
-              name: only.id
-            })
-          } else {
-            publishEvent({
-              type: 'applets:refresh',
-              ...scope,
-              ...(data.only ? { only: data.only } : {})
-            })
-          }
+          publishEvent({
+            type: 'applets:refresh',
+            workspaceId: workspace.id,
+            only: only?.segment,
+            name: only?.id
+          })
           ws.send(JSON.stringify({ ok: true }))
           return
         }
@@ -444,11 +433,10 @@ export const control = Bun.serve({
           const match = await resolveWorkspace(ws, data.path)
           if (!match) return
           const workspacePath = match.path
-          const layout = await loadLayout(workspacePath)
 
           // Listing mode — no theme setting requested
           if (!data.font && !data.color && !data.radius && !data.agent) {
-            const theme = resolveWorkspaceTheme(layout.theme)
+            const theme = resolveWorkspaceTheme((await loadLayout(workspacePath)).theme)
             ws.send(
               JSON.stringify({
                 currentFont: theme.font,
@@ -460,7 +448,7 @@ export const control = Bun.serve({
             return
           }
 
-          const result = applyThemeUpdate(layout.theme, {
+          const result = applyThemeUpdate(undefined, {
             font: data.font,
             color: data.color,
             radius: data.radius,
@@ -471,8 +459,11 @@ export const control = Bun.serve({
             return
           }
 
-          await saveLayout({ ...layout, theme: result.theme }, workspacePath)
-          publishEvent({ type: 'theme:updated', workspaceId: match.id })
+          await updateLayout(workspacePath, layout => ({
+            ...layout,
+            theme: resolveWorkspaceTheme({ ...layout.theme, ...result.applied })
+          }))
+          publishEvent({ type: 'workspace-config:changed', workspaceId: match.id })
           ws.send(JSON.stringify({ ok: true, ...result.applied }))
           return
         }
@@ -515,7 +506,7 @@ export const control = Bun.serve({
           }
 
           await setWorkspaceConfig(workspacePath, patch)
-          publishEvent({ type: 'workspace:updated', workspaceId: match.id })
+          publishEvent({ type: 'workspace-config:changed', workspaceId: match.id })
           ws.send(
             JSON.stringify({
               ok: true,

@@ -3,12 +3,12 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import { requestJson } from '@/client/api/http'
 import { workspaceKeys } from '@/client/api/workspace-keys'
 import { toast } from '@/client/components/ui/toast'
-import { useWorkspaceEvent } from '@/client/runtime/use-workspace-events'
-import type { WorkspaceState } from '@/lib/types'
+import { useClientEvent } from '@/client/runtime/use-client-events'
+import type { CompiledView, WorkspaceState } from '@/lib/types'
 
 // Personal state for one workspace: tabs, pin, selected chats, chat
 // settings and fork history, and views being built. One cache, kept current by
-// write replies and `state:changed` events instead of refetches.
+// write replies and `personal-state:changed` events instead of refetches.
 
 export function workspaceStateKey(workspaceId: string) {
   return workspaceKeys.state(workspaceId)
@@ -159,9 +159,20 @@ export function useWorkspaceStateWrite<Input, Result extends StateReply = Worksp
 // changes, so cached states stay current even while their workspace is closed.
 export function useWorkspaceStateSync(): void {
   const queryClient = useQueryClient()
-  useWorkspaceEvent(event => {
-    if (event.type !== 'state:changed') return
-    if (!getCachedWorkspaceState(queryClient, event.workspaceId)) return
+  useClientEvent(event => {
+    if (event.type !== 'personal-state:changed') return
+    const current = getCachedWorkspaceState(queryClient, event.workspaceId)
+    if (!current || current.revision > event.state.revision) return
+    // The personal socket can deliver completion before the owner sends its views list.
+    const key = workspaceKeys.views(event.workspaceId)
+    const views = queryClient.getQueryData<CompiledView[]>(key)
+    const missing = event.completedViews?.filter(
+      view => current.pendingViews[view.id] && !views?.some(old => old.id === view.id)
+    )
+    if (views && missing?.length) {
+      void queryClient.cancelQueries({ queryKey: key })
+      queryClient.setQueryData(key, [...views, ...missing])
+    }
     receiveWorkspaceState(queryClient, event.workspaceId, event.state)
   })
 }

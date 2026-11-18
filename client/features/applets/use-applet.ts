@@ -18,7 +18,7 @@ import {
 import { attachAppletBridge } from '@/client/features/applets/applet-runtime'
 import { reportAppletError } from '@/client/features/applets/applet-log'
 import { useWorkspaceId } from '@/client/features/workspace/workspace-context'
-import { type WorkspaceEvent, useWorkspaceScopedEvent } from '@/client/runtime/use-workspace-events'
+import { type ClientEvent, useWorkspaceEvent } from '@/client/runtime/use-client-events'
 import type { AppletKind } from '@/lib/types'
 
 // Views receive URL query params. Widgets mount without params; applets must
@@ -40,23 +40,23 @@ type AppletKindSpec = {
   kind: AppletKind
   segment: AppletSegment
   // True when this MEI event means the named applet should cache-bust + reload.
-  shouldReload: (event: WorkspaceEvent, name: string) => boolean
+  shouldReload: (event: ClientEvent, name: string) => boolean
 }
 
 const WIDGET_KIND: AppletKindSpec = {
   kind: 'widget',
   segment: 'widgets',
   shouldReload: (e, name) =>
-    (e.type === 'widget:updated' && e.name === name) ||
-    (e.type === 'applets:refresh' && e.only !== 'views')
+    (e.type === 'widget:changed' && e.name === name) ||
+    (e.type === 'applets:refresh' && e.only !== 'views' && (!e.name || e.name === name))
 }
 
 const VIEW_KIND: AppletKindSpec = {
   kind: 'view',
   segment: 'views',
   shouldReload: (e, name) =>
-    (e.type === 'view:updated' && e.name === name) ||
-    (e.type === 'applets:refresh' && e.only !== 'widgets')
+    (e.type === 'view:changed' && e.name === name) ||
+    (e.type === 'applets:refresh' && e.only !== 'widgets' && (!e.name || e.name === name))
 }
 
 function loadApplet(
@@ -143,16 +143,14 @@ function useApplet(kind: AppletKindSpec, name: string, revision?: string): Apple
   // unmounted case, but doing it here keeps this self-sufficient and
   // order-independent. The bumped version remounts the component and re-runs its
   // `rpc()` calls.
-  useWorkspaceScopedEvent(workspaceId, event => {
+  useWorkspaceEvent(workspaceId, event => {
     if (kind.shouldReload(event, name)) {
       invalidateApplet(kind.segment, workspaceId, name)
       load()
     }
   })
 
-  // Owner events don't reach visitors yet. The applet lists refetch on window
-  // focus and carry each bundle's revision, so a remote applet reloads only when
-  // its build changed: a reload remounts it and keeps the old module in memory.
+  // Revisions catch rebuilds missed while the owner's socket was disconnected.
   const remote = isRemoteWorkspace(workspaceId)
   const seen = useRef({ key, revision })
   useEffect(() => {
@@ -183,14 +181,13 @@ export function useView(name: string, revision?: string): AppletState {
 export function useAppletCacheInvalidation(): void {
   const workspaceId = useWorkspaceId()
   const queryClient = useQueryClient()
-  useWorkspaceScopedEvent(workspaceId, event => {
-    // Owner build events don't reach visitors. `moi refresh` from the visitor's
-    // agent does, so it also re-reads the owner's lists for new or removed applets.
+  useWorkspaceEvent(workspaceId, event => {
+    // Refresh the owner lists too, so new or removed applets become visible.
     if (
       isRemoteWorkspace(workspaceId, queryClient) &&
       (event.type === 'applets:refresh' ||
-        event.type === 'view:updated' ||
-        event.type === 'widget:updated')
+        event.type === 'view:changed' ||
+        event.type === 'widget:changed')
     ) {
       void queryClient.invalidateQueries({
         queryKey: workspaceKeys.views(workspaceId)
@@ -199,12 +196,13 @@ export function useAppletCacheInvalidation(): void {
         queryKey: workspaceKeys.widgets(workspaceId)
       })
     }
-    if (event.type === 'view:updated') invalidateApplet('views', workspaceId, event.name)
-    else if (event.type === 'widget:updated') invalidateApplet('widgets', workspaceId, event.name)
+    if (event.type === 'view:changed') invalidateApplet('views', workspaceId, event.name)
+    else if (event.type === 'widget:changed') invalidateApplet('widgets', workspaceId, event.name)
     else if (event.type === 'applets:refresh') {
-      // Segment-wide: `moi refresh` names no applet, so every cached module in
-      // the targeted kind(s) is stale — including ones whose tabs are
-      // backgrounded right now.
+      if (event.only && event.name) {
+        invalidateApplet(event.only, workspaceId, event.name)
+        return
+      }
       if (event.only !== 'views') invalidateAppletSegment('widgets', event.workspaceId)
       if (event.only !== 'widgets') invalidateAppletSegment('views', event.workspaceId)
     }

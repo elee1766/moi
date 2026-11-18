@@ -6,6 +6,8 @@ import { useWorkspaceHarnessChanges } from '@/client/features/workspace/harness-
 import { useWorkspaceTheme } from '@/client/runtime/workspace-theme'
 import { CollabProvider } from '@/client/features/collab'
 import { useQueryClient } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+import { useWorkspaceSocket } from '@/client/features/workspace/use-workspace-socket'
 
 import { workspaceKeys } from '@/client/api/workspace-keys'
 import { useAppConfig } from '@/client/api/app-config'
@@ -20,7 +22,7 @@ import {
 import { WorkspaceScreen } from '@/client/features/workspace/workspace-screen'
 import { useViews } from '@/client/features/views/api'
 import { useWidgets } from '@/client/features/overview/api'
-import { useWorkspaceScopedEvent } from '@/client/runtime/use-workspace-events'
+import { useWorkspaceEvent } from '@/client/runtime/use-client-events'
 import { BROWSER_TAB_ID } from '@/client/lib/browser-tab-id'
 
 type WorkspaceRouteProps = {
@@ -30,7 +32,6 @@ type WorkspaceRouteProps = {
 // Navigation reads the raw browser address so encoded paths and query params
 // are decoded exactly once; the route only owns the workspace ID.
 export function WorkspaceRoute({ id }: WorkspaceRouteProps) {
-  const { environment } = useAppConfig()
   const separator = id.indexOf(':')
   if (separator !== -1)
     return (
@@ -42,13 +43,29 @@ export function WorkspaceRoute({ id }: WorkspaceRouteProps) {
   return (
     <SidebarLayout>
       <Workspace id={id}>
-        <WorkspaceLayoutProvider id={id}>
-          <CollabProvider workspaceId={id} enabled={environment === 'cloud'}>
+        <WorkspaceLayoutProvider key={id} id={id}>
+          <WorkspaceLive id={id}>
             <WorkspaceContent id={id} />
-          </CollabProvider>
+          </WorkspaceLive>
         </WorkspaceLayoutProvider>
       </Workspace>
     </SidebarLayout>
+  )
+}
+
+type WorkspaceLiveProps = {
+  id: string
+  children: ReactNode
+}
+
+// One owner connection carries shared updates always and presence on Cloud.
+function WorkspaceLive({ id, children }: WorkspaceLiveProps) {
+  const { environment } = useAppConfig()
+  const socket = useWorkspaceSocket(id)
+  return (
+    <CollabProvider workspaceId={id} enabled={environment === 'cloud'} socket={socket}>
+      {children}
+    </CollabProvider>
   )
 }
 
@@ -63,18 +80,18 @@ function WorkspaceContent({ id }: WorkspaceRouteProps) {
   const views = useViews(id)
   useAppletCacheInvalidation()
 
-  useWorkspaceScopedEvent(id, event => {
-    if (event.type === 'theme:updated' || event.type === 'workspace:updated') {
+  useWorkspaceEvent(id, event => {
+    if (event.type === 'workspace-config:changed') {
       // Skip our own save: the cache already holds it, and the refetch could
       // land an older value over a newer optimistic change.
       if (event.origin === BROWSER_TAB_ID) return
       queryClient.invalidateQueries({ queryKey: workspaceKeys.layout(id) })
-    } else if (event.type === 'widget-layout:updated' || event.type === 'widget:updated') {
-      // widget:updated too: a rebundle bumps the widget's content revision, and
+    } else if (event.type === 'widgets-list:changed' || event.type === 'widget:changed') {
+      // widget:changed too: a rebundle bumps the widget's content revision, and
       // the thumbnail invalidation hook reads it off this query.
       queryClient.invalidateQueries({ queryKey: workspaceKeys.widgets(id) })
-    } else if (event.type === 'view:updated') {
-      // view:updated also bumps the built bundle revision used by thumbnail
+    } else if (event.type === 'view:changed') {
+      // view:changed also bumps the built bundle revision used by thumbnail
       // freshness checks.
       queryClient.invalidateQueries({ queryKey: workspaceKeys.views(id) })
     }
