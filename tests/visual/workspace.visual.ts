@@ -129,6 +129,7 @@ test(
   'active avatar tooltip and sharing controls',
   async page => {
     await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'clipboard', { value: { writeText: async () => {} } })
       const NativeWebSocket = window.WebSocket
       window.WebSocket = new Proxy(NativeWebSocket, {
         construct(target, args) {
@@ -145,6 +146,20 @@ test(
               socket.onmessage?.(
                 new MessageEvent('message', {
                   data: JSON.stringify({
+                    type: 'agent-activity:changed',
+                    agentIds: [
+                      'agent:pip',
+                      'agent:cleo',
+                      'agent:peach',
+                      'agent:frankie',
+                      'agent:shipmate'
+                    ]
+                  })
+                })
+              )
+              socket.onmessage?.(
+                new MessageEvent('message', {
+                  data: JSON.stringify({
                     type: 'welcome',
                     version: 2,
                     connectionId: 'self',
@@ -153,6 +168,12 @@ test(
                       { id: 'tony', name: 'Tony', email: 'tony@example.com', color: 'blue' }
                     ],
                     connections: [
+                      ...['lee', 'sam', 'pat', 'agent:cleo'].map(id => ({
+                        connectionId: id,
+                        userId: id,
+                        location: { page: 'overview', status: 'active' },
+                        presence: []
+                      })),
                       {
                         connectionId: 'self',
                         userId: message.profile.id,
@@ -181,6 +202,31 @@ test(
       })
     })
     await page.goto(WORKSPACE_PAGE)
+    const agents = page.getByRole('group', { name: 'Recently active agents' })
+    await expect(agents.getByLabel('Pip')).toBeVisible()
+    await expect(agents.getByLabel('Cleo')).toBeVisible()
+    await expect(agents.getByText('+1')).toBeVisible()
+    await agents.getByLabel('Pip').hover()
+    await expect(agents.getByLabel('Shipmate')).toBeVisible()
+    await expect(agents.getByText('+1')).not.toBeVisible()
+    const tooltip = page.locator('[data-slot="tooltip-content"]')
+    await agents.getByLabel('Pip').hover()
+    await expect(tooltip.getByText('Pip', { exact: true })).toBeVisible()
+    await expect(tooltip.getByText('Active now', { exact: true })).toBeVisible()
+    await takeSnapshot('recent agent tooltip')
+    await tooltip.getByText('Active now', { exact: true }).hover()
+    await expect(agents.getByText('+1')).toBeVisible()
+    await expect(agents.getByLabel('Shipmate')).not.toBeVisible()
+    await agents.getByLabel('Cleo').hover()
+    await expect(tooltip.getByText('Overview', { exact: true })).toBeVisible()
+    await expect(tooltip.getByText('Active now', { exact: true })).not.toBeVisible()
+    await agents.getByLabel('Pip').click()
+    await expect(page.getByRole('textbox', { name: 'Email', exact: true })).not.toBeVisible()
+    const users = page.getByRole('group', { name: 'Active users', exact: true })
+    await expect(users.getByText('+1')).toBeVisible()
+    await page.getByRole('button', { name: 'Users in this workspace' }).locator('svg').hover()
+    await expect(users.getByText('+1')).not.toBeVisible()
+    await expect(users.getByRole('button', { name: 'pat', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Tony', exact: true }).hover()
     await expect(
       page.locator('[data-slot="tooltip-content"]').getByText('Scratchpad', { exact: true })
@@ -194,7 +240,20 @@ test(
     await expect(members.getByText('alex@example.com', { exact: true })).toBeVisible()
     await expect(members.getByText('Tony', { exact: true })).toBeVisible()
     await expect(members.getByText('tony@example.com', { exact: true })).toBeVisible()
+    await expect(
+      page.locator('li:has([aria-label="Alex"])').getByText('Owner', { exact: true })
+    ).toBeVisible()
+    await expect(members.getByText('Owner', { exact: true })).toHaveCount(1)
+    await expect(
+      page
+        .getByRole('region', { name: 'Invite your agent' })
+        .getByRole('button', { name: 'Copy prompt' })
+    ).toBeVisible()
     await takeSnapshot('sharing from own avatar')
+    await page.route('**/agent-invitations', () => new Promise(() => {}))
+    await page.getByRole('button', { name: 'Copy prompt' }).click()
+    await expect(page.getByRole('button', { name: 'Loading invite…' })).toBeVisible()
+    await takeSnapshot('loading agent invite')
     await page.getByRole('button', { name: 'Alex (You), open sharing', exact: true }).click()
     await expect(page.getByRole('textbox', { name: 'Email', exact: true })).not.toBeVisible()
   },
@@ -212,7 +271,19 @@ test(
         id: WORKSPACE,
         members: [
           sharingUser,
-          { id: 'tony', type: 'user', name: 'Tony', email: 'tony@example.com', isAnonymous: false }
+          { id: 'pip', type: 'agent', name: 'Pip', client: 'dot' },
+          { id: 'cleo', type: 'agent', name: 'Cleo', client: 'duet' },
+          { id: 'peach', type: 'agent', name: 'Peach', client: 'muse' },
+          { id: 'frankie', type: 'agent', name: 'Frankie', client: 'instinct' },
+          { id: 'shipmate', type: 'agent', name: 'Shipmate', client: 'town-assistant' },
+          { id: 'tony', type: 'user', name: 'Tony', email: 'tony@example.com', isAnonymous: false },
+          ...['lee', 'sam', 'pat'].map(id => ({
+            id,
+            type: 'user' as const,
+            name: id,
+            email: id + '@example.com',
+            isAnonymous: false
+          }))
         ],
         invitations: []
       }
@@ -274,12 +345,66 @@ test(
       page.getByRole('button', { name: 'Users in this workspace', exact: true })
     ).toBeVisible()
     await expect(page.getByRole('button', { name: 'Settings', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Alex (You), open sharing' })).toBeVisible()
     await takeSnapshot('remote overview')
     await page.getByRole('button', { name: 'Shared board menu', exact: true }).click()
     await expect(page.getByRole('menuitem', { name: 'Theme', exact: true })).toBeVisible()
     await expect(page.getByRole('menuitem', { name: 'Settings', exact: true })).toBeVisible()
   },
   remoteOptions
+)
+
+test(
+  'manage connected agents in shared workspace settings',
+  async page => {
+    const requests: string[] = []
+    await page.route(`**/cloud${ownerBase}/members/bot-membership`, route => {
+      requests.push(route.request().method())
+      return route.fulfill({ status: 204 })
+    })
+    await page.goto(remotePage)
+    const sharing = page.getByRole('button', { name: 'Alex (You), open sharing' })
+    await sharing.click()
+    const people = page.getByRole('list', { name: 'Who has access' })
+    await expect(people.getByText('Alex', { exact: true })).toBeVisible()
+    await expect(people.getByText('Trip bot')).toHaveCount(0)
+    await sharing.click()
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Agents' })).toBeVisible()
+    const menu = page.getByRole('dialog').getByRole('button', { name: 'More options', exact: true })
+    await expect(menu).toBeVisible()
+    await expect(page.locator('[aria-label="Trip bot"] img')).toBeVisible()
+    await expect(page.getByText('Trip bot', { exact: true })).toBeVisible()
+    await expect(page.getByText('Grok Bot', { exact: true })).toBeVisible()
+    await takeSnapshot('connected workspace agents')
+    await menu.click()
+    const remove = page.getByRole('menuitem', { name: 'Remove from workspace', exact: true })
+    await expect(remove).toBeVisible()
+    await takeSnapshot('workspace agent options')
+    await remove.click()
+    await expect(page.getByText('No agents connected to this workspace.')).toBeVisible()
+    expect(requests).toEqual(['DELETE'])
+  },
+  {
+    ...remoteOptions,
+    members: [
+      {
+        id: 'alice:owner-board',
+        members: [
+          sharingUser,
+          {
+            type: 'agent',
+            id: 'bot',
+            client: 'grok-bot',
+            name: 'Trip bot',
+            membershipId: 'bot-membership'
+          }
+        ],
+        invitations: []
+      }
+    ]
+  }
 )
 
 for (const failure of [

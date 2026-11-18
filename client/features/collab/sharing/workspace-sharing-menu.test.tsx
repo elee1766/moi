@@ -12,6 +12,8 @@ import { Router } from 'wouter'
 
 import type { UserProfile, Connection } from '@/lib/collab/types'
 
+import { seedWorkspaceInfo } from '../../workspace/workspace-test-utils'
+import { AgentInvite } from './agent-invite'
 import { WorkspaceSharingMenu } from './workspace-sharing-menu'
 import { summarizeWorkspaceUsers } from '../presence/users'
 import { WorkspaceMembers } from './workspace-members'
@@ -120,9 +122,10 @@ test('header limits active avatars to four and puts the overflow on the left', (
     users: [...peers, self],
     otherConnections: peers.map(p => connection(p, 'overview'))
   })
-  expect(html).toContain('aria-label="2 more active users"')
-  expect(html).not.toContain('aria-label="Peer 3"')
-  const labels = ['2 more active users', 'Peer 2', 'Peer 1', 'Peer 0', 'Self']
+  expect(html.indexOf('+2')).toBeGreaterThan(-1)
+  expect(html.indexOf('+2')).toBeLessThan(html.indexOf('aria-label="Peer 2"'))
+  expect(html).toMatch(/<div[^>]*inert=""[^>]*><button[^>]*aria-label="Peer 3"/)
+  const labels = ['Peer 2', 'Peer 1', 'Peer 0', 'Self']
   for (let i = 1; i < labels.length; i++) {
     expect(html.indexOf(`aria-label="${labels[i - 1]}"`)).toBeLessThan(
       html.indexOf(`aria-label="${labels[i]}"`)
@@ -179,6 +182,58 @@ test('menu stays visible without a current user', () => {
 describe('workspace sharing', () => {
   afterEach(cleanupAccount)
 
+  test('Copy prompt copies the current workspace name and the returned invite URL', async () => {
+    const ui = await mountAccount({
+      pendingMutation: true,
+      pendingMutationPaths: ['/agent-invitations'],
+      children: <AgentInvite workspaceId="one" workspaceName="SF Trip" />
+    })
+    seedWorkspaceInfo('one', { user_id: 'alice', workspace_id: 'board' }, ui.qc)
+    const copied: string[] = []
+    const notification = spyOn(toast, 'add')
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          copied.push(text)
+        }
+      }
+    })
+    try {
+      const path = '/cloud/api/workspaces/alice:board/agent-invitations'
+      expect(ui.calls.some(call => call.path === path)).toBe(false)
+      ui.failures.mutation = true
+      await ui.click('Copy prompt')
+      const button = ui.document.querySelector('section button')!
+      expect(button.textContent).toBe('Loading invite…')
+      expect(button.hasAttribute('disabled')).toBe(true)
+      await act(async () => ui.mutationRequest.resolve())
+      expect(copied).toEqual([])
+      expect(notification).toHaveBeenCalledWith({
+        title: 'Couldn’t copy invite prompt',
+        description: 'Only the owner can do that.',
+        type: 'error'
+      })
+      ui.failures.mutation = false
+      await ui.click('Copy prompt')
+      expect(copied).toEqual([
+        'Follow the instructions at this one-time link to join my Moi workspace “SF Trip”: https://example.com/invite/test'
+      ])
+      expect(button.textContent).toBe('Copied')
+      expect(notification).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        await Bun.sleep(1550)
+      })
+      expect(button.textContent).toBe('Copy prompt')
+      expect(ui.calls.filter(call => call.path === path)).toHaveLength(2)
+    } finally {
+      notification.mockRestore()
+      if (original) Object.defineProperty(navigator, 'clipboard', original)
+      else Reflect.deleteProperty(navigator, 'clipboard')
+    }
+  })
+
   test('disabled presence shows published workspace members and reflects membership updates', async () => {
     const ui = await mountAccount({
       children: (
@@ -192,8 +247,8 @@ describe('workspace sharing', () => {
     expect(ui.calls.some(call => call.path.endsWith('/members'))).toBe(false)
     expect(ui.document.body.textContent).toContain('Alex')
     expect(ui.document.body.textContent).not.toContain('Offline')
-    expect(ui.document.body.textContent).not.toContain('Invite your agent')
-    expect(ui.document.body.textContent).not.toContain('Copy prompt')
+    expect(ui.document.body.textContent).toContain('Invite your agent')
+    expect(ui.document.body.textContent).toContain('Copy prompt')
 
     const tony = {
       id: 'tony',
@@ -224,15 +279,20 @@ describe('workspace sharing', () => {
       )
     })
     await ui.settle()
+    const selfAvatar = () => ui.document.querySelector('[aria-label="Alex (You), open sharing"]')
+    expect(selfAvatar()).toBeNull()
     await ui.click('Users in this workspace')
     expect(ui.document.querySelector('[aria-label="Loading workspace members"]')).not.toBeNull()
     expect(ui.calls.some(call => call.path.endsWith('/members'))).toBe(false)
     await act(async () => setAllWorkspaceMembers([]))
     await ui.settle()
     expect(ui.document.querySelector('[aria-label="Loading workspace members"]')).toBeNull()
+    expect(selfAvatar()).not.toBeNull()
     const list = ui.document.querySelector('[aria-label="Who has access"]')!
     expect(list.textContent).toContain('Alex')
     expect(list.textContent).toContain('(You)')
+    await act(async () => setWorkspaceMembers('one', { members: [], invitations: [] }))
+    expect(selfAvatar()).toBeNull()
   })
 
   test('header navigation, self, overflow, and empty presence keep distinct actions', async () => {
@@ -283,15 +343,17 @@ describe('workspace sharing', () => {
     expect(ui.document.querySelector('form')).not.toBeNull()
     await ui.click('Self (You), open sharing')
     expect(ui.document.querySelector('form')).toBeNull()
-    await ui.click('2 more active users')
-    expect(ui.document.querySelector('form')).not.toBeNull()
-    await ui.click('2 more active users')
-    expect(ui.document.querySelector('form')).toBeNull()
+    const users = ui.document.querySelector('[aria-label="Active users"]')!
+    expect(users.textContent).toContain('+2')
+    expect(
+      Array.from(users.querySelectorAll('button, [tabindex]')).some(el => el.textContent === '+2')
+    ).toBe(false)
     await act(async () => {
       engine.setOtherConnections([])
       engine.setLocation({ page: 'overview', status: 'away' })
     })
-    expect(ui.document.querySelector('[aria-label="Self (You), open sharing"]')).toBeNull()
+    expect(ui.document.querySelector('[aria-label="Self (You), open sharing"]')).not.toBeNull()
+    expect(ui.document.querySelector('[aria-label="Active colleague"]')).toBeNull()
     await ui.click('Users in this workspace')
     expect(ui.document.querySelector('form')).not.toBeNull()
     await act(async () => engine.setLocation({ page: 'overview', status: 'active' }))
@@ -520,6 +582,7 @@ describe('workspace sharing', () => {
       expect(list.textContent).toContain('sam@example.com')
       expect(list.children[0]!.querySelector('button')).toBeNull()
       ui.failures.mutation = true
+      await ui.click('More options', list.querySelector('li:has([aria-label="Tony"])')!)
       await ui.click('Remove')
       expect(list.textContent).toContain('Tony')
       expect(notification).toHaveBeenCalledWith({
@@ -528,10 +591,12 @@ describe('workspace sharing', () => {
         type: 'error'
       })
       ui.failures.mutation = false
+      await ui.click('More options', list.querySelector('li:has([aria-label="Tony"])')!)
       await ui.click('Remove')
       expect(ui.calls.some(call => call.path.endsWith('/members/member-tony'))).toBe(true)
       expect(list.textContent).not.toContain('Tony')
       expect(list.textContent).toContain('sam@example.com')
+      await ui.click('More options', list.lastElementChild!)
       await ui.click('Revoke invitation')
       expect(ui.calls.some(call => call.path.endsWith('/invitations/invite-sam'))).toBe(true)
       expect(list.textContent).not.toContain('sam@example.com')

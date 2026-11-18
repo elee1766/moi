@@ -1,10 +1,8 @@
 import { useState } from 'react'
-import { IconX } from '@tabler/icons-react'
 import { Button } from '@/client/components/ui/button'
 import { Input } from '@/client/components/ui/input'
 import { Spinner } from '@/client/components/ui/spinner'
 import { PopoverTitle } from '@/client/components/ui/popover'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/client/components/ui/tooltip'
 import { toast } from '@/client/components/ui/toast'
 import { cn } from '@/client/lib/cn'
 import { colorForId } from '@/lib/collab/colors'
@@ -12,12 +10,9 @@ import { CloudApiError } from '../../account/api'
 import { useIdentity } from '../../identity/use-identity'
 import { collabIdentityId, identityKey } from '../../identity/types'
 import { getAccountGeneration } from '../../identity/store'
+import { MembershipMenu } from './membership-menu'
 import { User } from '../components/user'
-import {
-  type useWorkspaceMembers,
-  useMembershipAction,
-  type MembershipAction
-} from '../members/hooks'
+import { type useWorkspaceMembers, useMembershipAction } from '../members/hooks'
 import type { WorkspaceMember, WorkspaceInvitation } from '../members/types'
 import type { WorkspaceUserInfo } from '../presence/users'
 
@@ -47,6 +42,7 @@ export function WorkspaceMembers({ workspaceId, users, membership }: WorkspaceMe
         workspaceId={workspaceId}
         users={users}
         membersById={membersById}
+        ownerId={membership.members?.[0]?.id}
         invitations={membership.invitations ?? []}
       />
       {membership.isPending && (
@@ -146,6 +142,7 @@ function InviteForm({ className, workspaceId, members, invitations }: InviteForm
 type MembersListProps = {
   className?: string
   workspaceId: string
+  ownerId?: string
   membersById?: Map<string, WorkspaceMember>
   invitations: WorkspaceInvitation[]
   users: WorkspaceUserInfo[]
@@ -155,6 +152,7 @@ function MembersList({
   className,
   workspaceId,
   membersById,
+  ownerId,
   invitations,
   users
 }: MembersListProps) {
@@ -167,6 +165,7 @@ function MembersList({
         <MemberRow
           key={user.profile.id}
           user={user}
+          isOwner={user.profile.id === ownerId}
           workspaceId={workspaceId}
           membershipId={membersById?.get(user.profile.id)?.membershipId}
         />
@@ -180,11 +179,12 @@ function MembersList({
 
 type MemberRowProps = {
   user: WorkspaceUserInfo
+  isOwner: boolean
   workspaceId: string
   membershipId?: string
 }
 
-function MemberRow({ user, workspaceId, membershipId }: MemberRowProps) {
+function MemberRow({ user, isOwner, workspaceId, membershipId }: MemberRowProps) {
   return (
     <li className="flex min-w-0 items-center gap-2 px-2 py-1">
       <User
@@ -194,8 +194,9 @@ function MemberRow({ user, workspaceId, membershipId }: MemberRowProps) {
         showYouLabel={user.self}
         description={user.profile.email}
       />
+      {isOwner && <span className="mr-1.5 shrink-0 text-xs text-muted-foreground">Owner</span>}
       {membershipId && (
-        <RemoveButton workspaceId={workspaceId} action={{ type: 'remove', membershipId }} />
+        <MembershipMenu workspaceId={workspaceId} action={{ type: 'remove', membershipId }} />
       )}
     </li>
   )
@@ -215,55 +216,11 @@ function InvitationRow({ workspaceId, invitation }: InvitationRowProps) {
         }}
         description={invitation.email}
       />
-      <RemoveButton
+      <MembershipMenu
         workspaceId={workspaceId}
         disabled={invitation.pending}
         action={{ type: 'revoke', invitationId: invitation.id }}
       />
     </li>
-  )
-}
-
-type RemoveButtonProps = {
-  workspaceId: string
-  action: Exclude<MembershipAction, { type: 'invite' }>
-  disabled?: boolean
-}
-
-function RemoveButton({ workspaceId, action, disabled }: RemoveButtonProps) {
-  const mutation = useMembershipAction(workspaceId)
-  const label = action.type === 'remove' ? 'Remove' : 'Revoke invitation'
-  async function submit() {
-    if (mutation.isPending || disabled) return
-    const generation = getAccountGeneration()
-    try {
-      await mutation.mutateAsync(action)
-    } catch (error) {
-      if (generation !== getAccountGeneration()) return
-      toast.add({
-        title: action.type === 'remove' ? 'Couldn’t remove member' : 'Couldn’t revoke invitation',
-        description: error instanceof Error ? error.message : 'Try again',
-        type: 'error'
-      })
-    }
-  }
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="shrink-0 text-muted-foreground"
-            aria-label={label}
-            disabled={disabled || mutation.isPending}
-            onClick={() => void submit()}
-          />
-        }
-      >
-        <IconX stroke={1.75} />
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
   )
 }

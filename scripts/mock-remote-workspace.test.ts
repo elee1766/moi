@@ -1,3 +1,4 @@
+import type { Connection } from '../lib/collab/types'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, mkdir, rm, cp, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -97,12 +98,22 @@ describe('owner startup', () => {
       origin.replace('http:', 'ws:') + '/api/workspaces/owner-board/events'
     )
     const received: Record<string, unknown>[] = []
-    const welcome = Promise.withResolvers<void>()
+    const peersActive = Promise.withResolvers<void>()
+    const rejected = Promise.withResolvers<void>()
+    const agentActivity = Promise.withResolvers<string[]>()
     const changed = Promise.withResolvers<void>()
     socket.onmessage = event => {
       const message = JSON.parse(String(event.data))
       received.push(message)
-      if (message.type === 'welcome') welcome.resolve()
+      if (message.type === 'error') rejected.resolve()
+      if (message.type === 'agent-activity:changed' && received.some(m => m.type === 'welcome'))
+        agentActivity.resolve(message.agentIds)
+      if (message.type === 'welcome' || message.type === 'connections') {
+        const active = message.connections
+          .filter((connection: Connection) => connection.location?.status === 'active')
+          .map((connection: Connection) => connection.userId)
+        if (active.includes('alice')) peersActive.resolve()
+      }
       if (message.type === 'workspace-config:changed') changed.resolve()
     }
     try {
@@ -110,6 +121,8 @@ describe('owner startup', () => {
         socket.onopen = () => resolve()
         socket.onerror = reject
       })
+      socket.send(JSON.stringify({ type: 'join' }))
+      await rejected.promise
       socket.send(
         JSON.stringify({
           type: 'join',
@@ -117,7 +130,8 @@ describe('owner startup', () => {
           profile: { id: 'visitor', name: 'Visitor', color: 'blue' }
         })
       )
-      await welcome.promise
+      await peersActive.promise
+      expect(await agentActivity.promise).toEqual(['agent:launch-bot', 'agent:review-bot'])
       const state = await fetch(origin + '/api/workspaces/owner-board/state/tabs', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -250,6 +264,25 @@ async function setup() {
   return { origin, request, forwarded, ownerRequests, batiokOrigin: batiok.url.origin }
 }
 
+test('members can copy a fresh agent invite prompt for the mock workspace', async () => {
+  const { origin, request } = await setup()
+  const path = '/cloud/api/workspaces/alice:owner-board/agent-invitations'
+  const post = { method: 'POST' }
+  expect((await fetch(origin + path, post)).status).toBe(401)
+  expect((await request(path, post)).status).toBe(404)
+  await request('/cloud/api/invitations/mock-owner-invite/accept', post)
+  const started = Date.now()
+  const response = await request(path, post)
+  expect(response.status).toBe(201)
+  expect(response.headers.get('content-type')).toContain('application/json')
+  const { invitationUrl: link, expiresAt } = await response.json()
+  expect(Date.parse(expiresAt)).toBeGreaterThanOrEqual(started + 15 * 60_000)
+  expect(Date.parse(expiresAt)).toBeLessThanOrEqual(Date.now() + 15 * 60_000)
+  expect(link.startsWith(origin + '/mock/agent-invites/')).toBe(true)
+  expect((await fetch(link)).status).toBe(200)
+  expect((await (await request(path, post)).json()).invitationUrl).not.toBe(link)
+})
+
 test('proxy supports invitation → accept → discovery and leaves registration on the visitor', async () => {
   const { origin, request, forwarded } = await setup()
   expect((await fetch(origin + '/cloud/api/workspaces/invitations')).status).toBe(401)
@@ -289,7 +322,7 @@ test('proxy supports invitation → accept → discovery and leaves registration
   })
   expect(
     (await (await request('/cloud/api/workspaces/alice:owner-board/members')).json()).members
-  ).toHaveLength(3)
+  ).toHaveLength(9)
   await request('/api/workspaces/other:board')
   expect(forwarded).toContain('/api/workspaces/other:board')
   const redirect = await request('/redirect')
@@ -481,6 +514,12 @@ test('mock membership supports invites, revocation and removal while keeping the
   expect(snapshot.members.map((member: { id: string }) => member.id)).toEqual([
     'alice',
     'jamie',
+    'launch-bot',
+    'review-bot',
+    'research-bot',
+    'instinct',
+    'muse',
+    'other',
     'visitor'
   ])
   expect(
@@ -500,7 +539,16 @@ test('mock membership supports invites, revocation and removal while keeping the
   expect((await sharing('/members/alice', { method: 'DELETE' })).status).toBe(404)
   snapshot = await (await sharing('/members')).json()
   expect(snapshot.invitations).toEqual([])
-  expect(snapshot.members.map((member: { id: string }) => member.id)).toEqual(['alice', 'visitor'])
+  expect(snapshot.members.map((member: { id: string }) => member.id)).toEqual([
+    'alice',
+    'launch-bot',
+    'review-bot',
+    'research-bot',
+    'instinct',
+    'muse',
+    'other',
+    'visitor'
+  ])
 })
 
 test('startup reset unregisters only the mock and deletes only unmodified generated references', async () => {
@@ -622,6 +670,12 @@ test('mock members join the initial page and every bootstrap snapshot', async ()
   expect(workspaces[1].members.map((member: { id: string }) => member.id)).toEqual([
     'alice',
     'jamie',
+    'launch-bot',
+    'review-bot',
+    'research-bot',
+    'instinct',
+    'muse',
+    'other',
     'visitor'
   ])
   const html = await (await request('/page')).text()
@@ -633,11 +687,19 @@ test('mock members join the initial page and every bootstrap snapshot', async ()
   })
   workspaces = await snapshot()
   expect(workspaces[1].invitations[0].email).toBe('new@example.com')
-  await request('/cloud/api/workspaces/alice:owner-board/members/member-jamie', {
+  const agent = workspaces[1].members.find((member: { type: string }) => member.type === 'agent')
+  expect(agent.name).toBe('Pip')
+  await request(`/cloud/api/workspaces/alice:owner-board/members/${agent.membershipId}`, {
     method: 'DELETE'
   })
   expect((await snapshot())[1].members.map((member: { id: string }) => member.id)).toEqual([
     'alice',
+    'jamie',
+    'review-bot',
+    'research-bot',
+    'instinct',
+    'muse',
+    'other',
     'visitor'
   ])
   await request('/cloud/api/workspaces/alice:owner-board/members/member-visitor', {
@@ -658,7 +720,7 @@ test('mock membership mutations notify connected browsers', async () => {
     await request('/cloud/api/invitations/mock-owner-invite/accept', { method: 'POST' })
     expect(new TextDecoder().decode((await reader.read()).value)).toContain('data: updated')
     const snapshot = await (await request('/mock/snapshot')).json()
-    expect(snapshot.workspaces[0].members).toHaveLength(3)
+    expect(snapshot.workspaces[0].members).toHaveLength(9)
   } finally {
     abort.abort()
     reader.releaseLock()

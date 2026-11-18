@@ -159,6 +159,14 @@ export async function mountAccount({
           }
           return new Response(null, { status: 204 })
         }
+        if (path.endsWith('/agent-invitations') && init?.method === 'POST')
+          return Response.json(
+            {
+              invitationUrl: 'https://example.com/invite/test',
+              expiresAt: '2030-01-01T00:15:00.000Z'
+            },
+            { status: 201 }
+          )
         if (path.endsWith('/invitations')) {
           membership = {
             ...membership,
@@ -259,8 +267,8 @@ export async function mountAccount({
     navigations,
     location,
     settle,
-    async click(label: string) {
-      const button = [...document.querySelectorAll<HTMLElement>('button, [role="menuitem"]')].find(
+    async click(label: string, within: ParentNode = document) {
+      const button = [...within.querySelectorAll<HTMLElement>('button, [role="menuitem"]')].find(
         button =>
           button.getAttribute('aria-label') === label || button.textContent?.trim() === label
       )

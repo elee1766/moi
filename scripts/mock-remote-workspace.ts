@@ -12,37 +12,77 @@ import { connect } from 'node:net'
 import { Readable } from 'node:stream'
 import envPaths from 'env-paths'
 
+import { colorForId } from '../lib/collab/colors'
+import { COLLAB_PROTOCOL_VERSION } from '../lib/collab/protocol'
+import type { WorkspaceMember } from '../client/features/collab/members/types'
+
 // Local-only Cloud fixture. State resets when the mock owner restarts.
-type MockMember = {
-  id: string
-  type: 'user'
-  name: string
-  email: string
-  isAnonymous: boolean
-  membershipId?: string
-}
+type MockUser = Extract<WorkspaceMember, { type: 'user' }>
+const initialMembers: WorkspaceMember[] = [
+  { id: 'alice', type: 'user', name: 'Alice', email: 'alice@example.com', isAnonymous: false },
+  {
+    id: 'jamie',
+    type: 'user',
+    name: 'Jamie',
+    email: 'jamie@example.com',
+    isAnonymous: false,
+    membershipId: 'member-jamie'
+  },
+  {
+    id: 'launch-bot',
+    type: 'agent',
+    name: 'Pip',
+    client: 'dot',
+    membershipId: 'member-launch-bot'
+  },
+  {
+    id: 'review-bot',
+    type: 'agent',
+    name: 'Cleo',
+    client: 'duet',
+    membershipId: 'member-review-bot'
+  },
+  {
+    id: 'research-bot',
+    type: 'agent',
+    name: 'Jamie’s Grok',
+    client: 'grok-bot',
+    membershipId: 'member-research-bot'
+  },
+  {
+    id: 'instinct',
+    type: 'agent',
+    name: 'Frankie',
+    client: 'instinct',
+    membershipId: 'member-instinct'
+  },
+  {
+    id: 'muse',
+    type: 'agent',
+    name: 'Peach',
+    client: 'muse',
+    membershipId: 'member-muse'
+  },
+  {
+    id: 'other',
+    type: 'agent',
+    name: 'Shipmate',
+    client: 'town-assistant',
+    membershipId: 'member-other'
+  }
+]
 export function createMockRemoteInvitations() {
-  const members: MockMember[] = [
-    { id: 'alice', type: 'user', name: 'Alice', email: 'alice@example.com', isAnonymous: false },
-    {
-      id: 'jamie',
-      type: 'user',
-      name: 'Jamie',
-      email: 'jamie@example.com',
-      isAnonymous: false,
-      membershipId: 'member-jamie'
-    }
-  ]
+  const members = [...initialMembers]
   const invitations: { id: string; email: string; expiresAt: string }[] = []
   return async function (request: Request): Promise<Response> {
     const path = new URL(request.url).pathname
     const suffix = path.slice('/mock/sharing'.length)
     const viewerHeader = request.headers.get('x-moi-mock-viewer')
     if (!viewerHeader) return Response.json({ error: 'Sign in required' }, { status: 401 })
-    const viewer = JSON.parse(decodeURIComponent(viewerHeader)) as MockMember
+    const viewer = JSON.parse(decodeURIComponent(viewerHeader)) as MockUser
     if (path === '/mock/cloud/api/workspaces/invitations' && request.method === 'GET')
       return Response.json({
-        invitations: members.some(member => member.id === viewer.id)
+        invitations: members.some(member => member.type === 'user' && member.id === viewer.id)
           ? []
           : [
               {
@@ -56,7 +96,7 @@ export function createMockRemoteInvitations() {
       path === '/mock/cloud/api/invitations/mock-owner-invite/accept' &&
       request.method === 'POST'
     ) {
-      if (!members.some(member => member.id === viewer.id))
+      if (!members.some(member => member.type === 'user' && member.id === viewer.id))
         members.push({ ...viewer, membershipId: `member-${viewer.id}` })
       return Response.json({
         success: true,
@@ -66,13 +106,13 @@ export function createMockRemoteInvitations() {
     }
     if (path === '/mock/snapshot' && request.method === 'GET')
       return Response.json({
-        workspaces: members.some(member => member.id === viewer.id)
+        workspaces: members.some(member => member.type === 'user' && member.id === viewer.id)
           ? [{ id: 'alice:owner-board', members, invitations }]
           : []
       })
     if (path === '/mock/cloud/api/workspaces/shared' && request.method === 'GET')
       return Response.json({
-        workspaces: members.some(member => member.id === viewer.id)
+        workspaces: members.some(member => member.type === 'user' && member.id === viewer.id)
           ? [
               {
                 id: 'owner-board',
@@ -82,7 +122,7 @@ export function createMockRemoteInvitations() {
             ]
           : []
       })
-    if (!members.some(member => member.id === viewer.id))
+    if (!members.some(member => member.type === 'user' && member.id === viewer.id))
       return Response.json(
         { error: 'Workspace not available', code: 'WORKSPACE_NOT_AVAILABLE' },
         { status: 404 }
@@ -96,7 +136,9 @@ export function createMockRemoteInvitations() {
         return Response.json({ error: 'Enter an email address' }, { status: 400 })
       const normalized = email.trim().toLowerCase()
       if (
-        members.some(member => member.email.toLowerCase() === normalized) ||
+        members.some(
+          member => member.type === 'user' && member.email.toLowerCase() === normalized
+        ) ||
         invitations.some(invite => invite.email === normalized)
       )
         return Response.json({ error: 'Already a member or invited' }, { status: 409 })
@@ -132,6 +174,7 @@ export function createMockRemoteProxy(batiok: string, owner: string) {
       throw new Error('Mock upstreams must be local HTTP origins')
   }
   const cloud = createMockRemoteInvitations()
+  const agentInvitePaths = new Set<string>()
   const memberStreams = new Set<ServerResponse>()
   const remote = /^\/api\/workspaces\/alice:owner-board(?=\/|\?|$)/
   const target = (path: string) => {
@@ -162,7 +205,7 @@ export function createMockRemoteProxy(batiok: string, owner: string) {
       redirect: 'manual'
     })
     if (!session.ok) throw new Error('Could not read the Batiok session')
-    const identity = (await session.json()) as { user?: MockMember } | null
+    const identity = (await session.json()) as { user?: MockUser } | null
     if (!identity?.user || identity.user.isAnonymous)
       return { response: Response.json({ error: 'Sign in required' }, { status: 401 }) }
     const headers = new Headers({
@@ -188,6 +231,45 @@ export function createMockRemoteProxy(batiok: string, owner: string) {
       '/cloud/api/invitations/mock-owner-invite/accept'
     ].includes(path)
     try {
+      if (
+        path === '/cloud/api/workspaces/alice:owner-board/agent-invitations' &&
+        req.method === 'POST'
+      ) {
+        const access = await ownerAccess(req)
+        if (!access.ok) {
+          res.writeHead(access.status, { 'content-type': 'application/json' })
+          res.end(await access.text())
+          return
+        }
+        const invitePath = `/mock/agent-invites/${crypto.randomUUID()}`
+        agentInvitePaths.add(invitePath)
+        const ttl = 15 * 60_000
+        setTimeout(() => agentInvitePaths.delete(invitePath), ttl).unref()
+        res.writeHead(201, {
+          'content-type': 'application/json',
+          'cache-control': 'no-store'
+        })
+        res.end(
+          JSON.stringify({
+            invitationUrl: `http://${req.headers.host}${invitePath}`,
+            expiresAt: new Date(Date.now() + ttl).toISOString()
+          })
+        )
+        return
+      }
+      if (path.startsWith('/mock/agent-invites/') && req.method === 'GET') {
+        const valid = agentInvitePaths.has(path)
+        res.writeHead(valid ? 200 : 404, {
+          'content-type': 'text/plain; charset=utf-8',
+          'cache-control': 'no-store'
+        })
+        res.end(
+          valid
+            ? 'Product launch agent invitation. This local preview is for testing Copy prompt.'
+            : 'Invitation unavailable'
+        )
+        return
+      }
       if (path === '/mock/member-events' || path === '/mock/snapshot') {
         const auth = await authorize(req)
         if (auth.response) {
@@ -513,6 +595,7 @@ if (import.meta.main) {
   process.env.MOI_DATA_DIR = root
   process.env.MOI_SECRET_BACKEND = 'file'
   process.env.MOI_ENVIRONMENT = 'cloud'
+  const { recordAgentActivity } = await import('../server/collab/agent-activity')
   const { collabManager } = await import('../server/collab/manager')
   const { setEventServer, workspaceEventsTopic } = await import('../server/events')
   const { api } = await import('../server/api')
@@ -631,7 +714,7 @@ export default function LaunchPlan() {
         if (!present.has(socket)) {
           if (String(message) === '{"type":"ping"}') return void socket.send('{"type":"pong"}')
           present.add(socket)
-          collabManager.open(socket, owner)
+          collabManager.open(socket, owner, { workspaceId: 'owner-board' })
         }
         collabManager.message(socket, message)
       },
@@ -639,6 +722,29 @@ export default function LaunchPlan() {
     }
   })
   setEventServer(ownerServer)
+  const alice = initialMembers.find(member => member.id === 'alice')!
+  const socket = new WebSocket(
+    `ws://127.0.0.1:${ownerServer.port}/api/workspaces/owner-board/events`
+  )
+  socket.onopen = () =>
+    socket.send(
+      JSON.stringify({
+        type: 'join',
+        version: COLLAB_PROTOCOL_VERSION,
+        profile: { id: alice.id, name: alice.name, color: colorForId(alice.id) },
+        location: { page: 'overview', status: 'active' }
+      })
+    )
+  function simulateAgentCommands() {
+    recordAgentActivity('owner-board', 'launch-bot')
+    recordAgentActivity('owner-board', 'review-bot')
+  }
+  simulateAgentCommands()
+  const heartbeat = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) socket.send('{"type":"ping"}')
+  }, 15_000)
+  const commands = setInterval(simulateAgentCommands, 30_000)
+
   const proxyPort = Number(process.env.MOCK_PROXY_PORT ?? 9898)
   const batiok = process.env.MOCK_BATIOK_ORIGIN ?? 'http://localhost:8787'
   const proxy = createMockRemoteProxy(batiok, ownerServer.url.origin)
@@ -647,6 +753,9 @@ export default function LaunchPlan() {
   })
   console.log(`Mock owner: ${ownerServer.url}; Batiok: ${batiok}`)
   const stop = async () => {
+    clearInterval(commands)
+    clearInterval(heartbeat)
+    socket.close()
     await collabManager.shutdown()
     proxy.close()
     proxy.closeAllConnections()
