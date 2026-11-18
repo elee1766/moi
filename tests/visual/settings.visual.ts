@@ -14,7 +14,7 @@ describe('Settings', () => {
     'cloud profile',
     async page => {
       await page.goto('/#/settings')
-      await expect(page.getByRole('button', { name: 'Change your avatar' })).not.toBeVisible()
+      await expect(page.getByRole('button', { name: 'Change your avatar' })).toBeVisible()
       await expect(page.getByRole('textbox', { name: 'Email', exact: true })).toHaveValue(
         'alex@example.com'
       )

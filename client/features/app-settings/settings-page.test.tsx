@@ -97,9 +97,10 @@ test('profile saves refresh the active workspace owner row without waiting for a
   )
 })
 
-test('settings show the avatar without an upload control', async () => {
+test('registered users can change their avatar in settings', async () => {
   const ui = await mountAccount({ children: <SettingsPage /> })
   expect(ui.document.querySelector('[data-slot="avatar"]')).not.toBeNull()
-  expect(ui.document.querySelector('[aria-label="Change your avatar"]')).toBeNull()
-  expect(ui.document.querySelector('input[type="file"]')).toBeNull()
+  expect(
+    ui.document.querySelector<HTMLButtonElement>('[aria-label="Change your avatar"]')?.disabled
+  ).toBe(false)
 })
