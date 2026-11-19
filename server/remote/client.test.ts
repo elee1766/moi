@@ -254,11 +254,7 @@ test('failed logout keeps credentials so revocation can be retried', async () =>
   expect((await stored()).refreshToken).toBe('old-refresh')
 })
 
-test('defaults to Moi Cloud and recognizes the previous public address', () => {
-  expect(resolveRemoteConfig({}).url).toBe('https://moi.computer/cloud')
-  expect(resolveRemoteConfig({ url: 'https://run.moi.computer/cloud/' }).url).toBe(
-    'https://moi.computer/cloud'
-  )
+test('validates and normalizes the configured Cloud URL', () => {
   expect(resolveRemoteConfig({ url: 'http://localhost:8787/custom/cloud/' }).url).toBe(
     'http://localhost:8787/custom/cloud'
   )
@@ -272,14 +268,11 @@ test('defaults to Moi Cloud and recognizes the previous public address', () => {
   }
 })
 
-test('a legacy public login works with the default URL but stays bound to Moi Cloud', async () => {
-  await credentials()
-  const auth = { ...(await stored()), url: 'https://run.moi.computer/cloud' }
-  await Bun.write(join(directory, 'remote-auth.json'), JSON.stringify(auth))
+test('source runs require an explicit Cloud URL', async () => {
   await rm(join(directory, 'config.json'))
-  expect(await client.loginInfo()).toEqual({ url: 'https://moi.computer/cloud', login: 'human' })
-  await config()
-  await expect(client.loginInfo()).rejects.toThrow('Your saved login is not valid')
+  await expect(client.loginInfo()).rejects.toThrow(
+    `Set remote.url in ${join(directory, 'config.json')}`
+  )
 })
 
 test('workspace content requests authenticate and refresh through the same client', async () => {

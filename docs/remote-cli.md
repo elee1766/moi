@@ -122,7 +122,7 @@ bun server/cli.ts remote
 bun server/cli.ts remote logout
 ```
 
-All installs, including source checkouts, default to `https://moi.computer/cloud`, and the public client ID is `moi-cli`. Both can be set through `remote.url` and `remote.clientId` in `config.json`. Managed machines set `remote.managed` to `true`. The URL includes the cloud mount path; the CLI appends `/api/...`. HTTP is accepted only for localhost testing. Set an explicit local URL when testing against a local Cloud server. Existing logins for the previous public hostname continue to work.
+Installed packages default to `https://moi.computer/cloud`. Source checkouts require an explicit `remote.url` in `config.json`. The URL includes the `/cloud` mount path, and HTTP is allowed for localhost testing. Set `remote.clientId` to override the default `moi-cli` client ID. Managed machines set `remote.managed` to `true`.
 
 ## Use from server code
 
