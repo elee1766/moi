@@ -87,6 +87,19 @@ jobs:
           fi
           grep -q '^package/runtime/cli.js$' "$RUNNER_TEMP/package-files.txt"
 
+      - name: Smoke-test the packed remote CLI
+        run: |
+          mkdir "$RUNNER_TEMP/remote-smoke"
+          cd "$RUNNER_TEMP/remote-smoke"
+          bun init -y >/dev/null
+          bun add "$RUNNER_TEMP/moi-computer.tgz"
+          for mode in development production; do
+            status=0
+            NODE_ENV="$mode" MOI_DATA_DIR="$PWD/profile-$mode" ./node_modules/.bin/moi remote --json >status.log 2>&1 || status=$?
+            test "$status" = 1
+            grep -F 'Signed out' status.log
+          done
+
       - name: Upload verified package
         uses: actions/upload-artifact@v4
         with:

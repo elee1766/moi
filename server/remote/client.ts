@@ -4,13 +4,12 @@ import { Mutex } from 'async-mutex'
 import { lock } from 'proper-lockfile'
 import { z } from 'zod'
 import { access as fileAccess, chmod, mkdir, rename, rm } from 'node:fs/promises'
-import { accessSync, constants, existsSync } from 'node:fs'
+import { accessSync, constants } from 'node:fs'
 import { join } from 'node:path'
 import { canUseDataDir, DATA_DIR } from '../data-dir'
 import { allowedCloudRequest, cloudRoutes } from './routes'
 import { controlBroker } from './broker-client'
 import { CloudSignInRequired } from './errors'
-import { PACKAGE_ROOT } from '../version'
 import {
   agentCredentialsSchema,
   agentAuthorization,
@@ -83,17 +82,19 @@ type RemoteConfig = { url: string; clientId: string; managed: boolean }
 export type Profile = z.infer<typeof profileSchema>
 export type SharedWorkspace = { id: string; owner: z.infer<typeof humanProfileSchema> }
 export type RemoteStatus = { me: Profile; workspaces: SharedWorkspace[] }
-export function resolveRemoteConfig(
-  remote: { url?: string; clientId?: string; managed?: boolean },
-  development: boolean,
-  directory = DATA_DIR
-): RemoteConfig {
-  if (development && !remote.url) {
-    throw new Error(
-      `For development, configure the Cloud URL to point to your local cloud dev server.\nSet remote.url in ${join(directory, 'config.json')}\nFor example, http://localhost:8787/cloud`
-    )
-  }
-  const url = new URL(remote.url ?? 'https://moi.computer/cloud')
+const CLOUD_URL = 'https://moi.computer/cloud'
+const LEGACY_ORIGIN = 'https://run.moi.computer'
+
+function canonicalCloudUrl(url: string) {
+  return url.replace(/\/+$/, '') === LEGACY_ORIGIN + '/cloud' ? CLOUD_URL : url
+}
+
+export function resolveRemoteConfig(remote: {
+  url?: string
+  clientId?: string
+  managed?: boolean
+}): RemoteConfig {
+  const url = new URL(remote.url ?? CLOUD_URL)
   if (
     url.protocol !== 'https:' &&
     !(url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
@@ -104,7 +105,7 @@ export function resolveRemoteConfig(
     throw new Error('Cloud URL must not contain credentials, a query, or a fragment')
   }
   return {
-    url: url.href.replace(/\/+$/, ''),
+    url: canonicalCloudUrl(url.href.replace(/\/+$/, '')),
     clientId: remote.clientId ?? 'moi-cli',
     managed: remote.managed === true
   }
@@ -157,9 +158,7 @@ export function createRemoteClient(directory: string, broker?: RemoteBroker) {
     }
     const parsed = configSchema.safeParse(raw)
     if (!parsed.success) throw new Error('Invalid remote settings in config.json')
-    const development =
-      process.env.NODE_ENV === 'development' || existsSync(join(PACKAGE_ROOT, '.git'))
-    return resolveRemoteConfig(parsed.data.remote ?? {}, development, directory)
+    return resolveRemoteConfig(parsed.data.remote ?? {})
   }
 
   async function post(config: RemoteConfig, path: string, values: Record<string, string>) {
@@ -183,7 +182,7 @@ export function createRemoteClient(directory: string, broker?: RemoteBroker) {
     }
     const parsed = credentialsSchema.safeParse(value)
     if (!parsed.success) throw new Error('Invalid remote credentials — run moi remote login')
-    return parsed.data
+    return { ...parsed.data, url: canonicalCloudUrl(parsed.data.url) }
   }
 
   async function read(config: RemoteConfig): Promise<Credentials> {
@@ -484,7 +483,7 @@ export function createRemoteClient(directory: string, broker?: RemoteBroker) {
   async function activeLogin(): Promise<{ url: string; login?: RemoteLogin }> {
     if (broker && !(await ownLogin())) {
       const info = await broker.info()
-      if (info) return info
+      if (info) return { ...info, url: canonicalCloudUrl(info.url) }
     }
     return loginInfo()
   }
@@ -514,6 +513,7 @@ export function createRemoteClient(directory: string, broker?: RemoteBroker) {
     }
     const url = new URL(value)
     const root = new URL(config.url)
+    if (config.url === CLOUD_URL && url.origin === LEGACY_ORIGIN) url.host = root.host
     const prefix = root.pathname.replace(/\/$/, '')
     const match = new RegExp(
       `^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/(agent-invite|invite)/([A-Za-z0-9_-]{1,240})$`
@@ -599,6 +599,7 @@ export function createRemoteClient(directory: string, broker?: RemoteBroker) {
         if (!saved.success)
           throw new Error('Could not read pending agent keys; credentials were kept')
         pending = saved.data
+        pending.keys.url = canonicalCloudUrl(pending.keys.url)
         if (
           pending.fingerprint !== fingerprint ||
           pending.keys.url !== config.url ||

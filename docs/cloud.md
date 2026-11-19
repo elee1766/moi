@@ -25,7 +25,7 @@ The cloud also keeps a WebSocket connection open. When a name, avatar, invitatio
 
 ## The main URLs
 
-Cloud URLs use the same host as Moi. For example, on Moi Run they start with `https://run.moi.computer`.
+The public Moi Cloud URL is `https://moi.computer/cloud`.
 
 | Purpose                               | URL                                                                   |
 | ------------------------------------- | --------------------------------------------------------------------- |
