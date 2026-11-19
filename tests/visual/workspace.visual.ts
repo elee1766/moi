@@ -96,7 +96,7 @@ test(
   'sharing duplicate invitation toast',
   async page => {
     await page.goto(WORKSPACE_PAGE)
-    await page.getByRole('button', { name: 'Users in this workspace' }).click()
+    await page.getByRole('button', { name: 'Alex (You), open sharing' }).click()
     await expect(page.getByText('tony@example.com', { exact: true }).first()).toBeVisible()
     await page.getByRole('textbox', { name: 'Email', exact: true }).fill('TONY@EXAMPLE.COM')
     await page.getByRole('button', { name: 'Invite', exact: true }).click()
